@@ -1,0 +1,13 @@
+{
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors", "weight_dtype": "default"}, "_meta": {"title": "Load Diffusion Model"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors", "type": "ltxv"}, "_meta": {"title": "Load CLIP"}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "PROMPT_HERE", "clip": ["2", 0]}, "_meta": {"title": "Positive"}},
+  "4": {"class_type": "LoadImage", "inputs": {"image": "start.png"}, "_meta": {"title": "시작 이미지"}},
+  "5": {"class_type": "LTXVImgToVideo", "inputs": {"positive": ["3", 0], "image": ["4", 0], "width": 768, "height": 512, "length": 97, "batch_size": 1}, "_meta": {"title": "LTXV Img To Video"}},
+  "6": {"class_type": "LTXVConditioning", "inputs": {"positive": ["5", 0], "frame_rate": 24}, "_meta": {"title": "LTXV Conditioning"}},
+  "7": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": 8, "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1, "model": ["1", 0], "positive": ["6", 0], "negative": ["6", 1], "latent_image": ["5", 2]}, "_meta": {"title": "KSampler"}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["9", 0]}, "_meta": {"title": "VAE Decode"}},
+  "9": {"class_type": "VAELoader", "inputs": {"vae_name": "ltx-2.5-video-vae-bf16.safetensors"}, "_meta": {"title": "Load VAE"}},
+  "10": {"class_type": "CreateVideo", "inputs": {"images": ["8", 0], "fps": 24}, "_meta": {"title": "Create Video"}},
+  "11": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0], "filename_prefix": "video/ltx", "format": "auto", "codec": "auto"}, "_meta": {"title": "Save Video"}}
+}

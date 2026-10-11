@@ -1,0 +1,10 @@
+node_modules/
+dist/
+outputs/
+data/
+workflows/
+*.log
+*.bak
+.env
+*.zip
+*.mp4

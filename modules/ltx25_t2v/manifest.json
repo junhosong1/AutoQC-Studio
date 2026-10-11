@@ -1,0 +1,15 @@
+{
+  "name": "LTX-2.5 · 텍스트→영상",
+  "category": "video",
+  "family": "ltx",
+  "description": "텍스트만으로 5초 영상(오디오 포함)을 만듭니다. 프롬프트 확장은 앱의 LLM이 담당 (LTX 내장 프롬프트 확장 끔).",
+  "license": "LTX-2 Community License",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (int8, 동적 로딩)",
+  "importedFrom": {
+    "promptId": "ef8d5ef2-4bfb-4a4c-b8b2-1b61b3e629c6",
+    "at": "2026-10-11T06:23:15.338Z",
+    "originalPrompt": "A close-up of an Arctic hunter's face, his eyes fixed straight ahead, narrowed and locked on something in the far distance directly in front of him, frost dusting his dark beard, one hand slowly reaching toward the rifle slung on his back, his breath quick and shallow, the tension in his jaw visible even through the scarf. The camera slowly pulls back, revealing him crouched at the edge of an ice floe, and ahead of him, in the exact direction of his gaze, a polar bear moves slowly along a distant ice ridge, its pale coat blending into the white haze, facing toward him. The pull-back continues, the hunter in the foreground and the bear far ahead, the two facing each other across the dark lead of water, the ice field and grey sea stretching around them, seabirds wheeling overhead. Midway through the shot, the complete title \"LTX-2.5\" fades in large and centered, plain white sans-serif letters with wide spacing, no glow, no shadow, no ornament, the lettering large enough to dominate the center of the frame, emerging slowly from the mist, resting still and blending into the snowscape, with the hunter and the bear still visible below on either side of the title, staying through the end of the scene. The wind carries the distant sound of shifting ice, a single low growl rolling across the water."
+  },
+  "notes": []
+}

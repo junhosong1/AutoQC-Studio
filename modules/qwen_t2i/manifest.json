@@ -1,0 +1,10 @@
+{
+  "name": "Qwen Image 2.1 · 텍스트→이미지",
+  "category": "image",
+  "family": "qwen",
+  "description": "한국어 기획 문장을 LLM이 영어 프롬프트로 확장해서 생성합니다. 기본 이미지 생성용.",
+  "license": "Apache-2.0",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (int8)",
+  "notes": []
+}

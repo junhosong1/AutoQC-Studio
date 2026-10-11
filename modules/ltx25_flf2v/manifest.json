@@ -1,0 +1,12 @@
+{
+  "name": "LTX-2.5 · 첫/끝 프레임→영상",
+  "category": "video",
+  "family": "ltx",
+  "description": "첫 프레임과 끝 프레임 이미지 사이를 영상으로 이어 줍니다. 긴 영상을 컷 단위로 이어 붙일 때 사용.",
+  "license": "LTX-2 Community License",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (int8, 동적 로딩)",
+  "convertedFrom": "workflows/video_ltx2_5_flf2v.json (ComfyUI 0.39.2 프런트엔드로 API 변환)",
+  "originalPrompt": "Use the provided start image as the first frame and the provided end image as the final frame anchor. The video opens on the back of the robotic hand, four fingers slightly curled, joints glowing faintly in the darkness, a low electrical hum filling the space. The hand rotates slowly at the wrist, turning from the back view toward the palm side, the four visible fingers uncurling gently one by one, starting with the index finger, then the middle, ring, and pinky, each joint clicking softly. As the palm turns upward, the thumb swings out from the side of the hand into view, clearly separate from the four fingers, all five fingers spreading open. A blue energy crystal fades into existence above the palm, its hum rising into a resonant tone, thin energy threads coiling around it, particles crackling softly as they spiral away like sparks. The crystal rotates slowly, hovering above the fully open hand, light spilling between the five spread fingers, the crystal's steady hum filling the silence as the video ends on the open palm with the glowing crystal.\n",
+  "notes": []
+}

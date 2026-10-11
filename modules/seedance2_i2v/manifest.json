@@ -1,0 +1,63 @@
+{
+ "name": "Seedance 2.0 · 이미지→영상 (유료 API)",
+ "description": "시작 프레임 1장 + 움직임 프롬프트로 영상을 만듭니다 (4~15초). 5초 기준 480p ≈ $0.50(≈106크레딧) · 720p ≈ $1.08(≈228) · 1080p ≈ $2.69(≈567). Fast는 약 20%, Mini는 약 50% 저렴해요.",
+ "category": "video",
+ "cost": "paid",
+ "license": "ByteDance Seedance API (이용 약관 확인)",
+ "vram": "클라우드 (로컬 VRAM 사용 안 함)",
+ "seedMax": 2147483647,
+ "params": [
+  {
+   "node": "1",
+   "input": "model",
+   "label": "모델 등급",
+   "type": "select",
+   "options": [
+    "Seedance 2.0",
+    "Seedance 2.0 Fast",
+    "Seedance 2.0 Mini"
+   ]
+  },
+  {
+   "node": "1",
+   "input": "model.resolution",
+   "label": "해상도",
+   "type": "select",
+   "options": [
+    "480p",
+    "720p",
+    "1080p"
+   ]
+  },
+  {
+   "node": "1",
+   "input": "model.ratio",
+   "label": "비율",
+   "type": "select",
+   "options": [
+    "16:9",
+    "4:3",
+    "1:1",
+    "3:4",
+    "9:16",
+    "21:9",
+    "adaptive"
+   ]
+  },
+  {
+   "node": "1",
+   "input": "model.duration",
+   "label": "duration",
+   "type": "int",
+   "min": 4,
+   "max": 15,
+   "step": 1
+  },
+  {
+   "node": "1",
+   "input": "model.generate_audio",
+   "label": "오디오 생성",
+   "type": "bool"
+  }
+ ]
+}

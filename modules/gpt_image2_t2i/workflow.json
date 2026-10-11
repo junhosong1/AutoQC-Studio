@@ -1,0 +1,29 @@
+{
+ "1": {
+  "class_type": "OpenAIGPTImageNodeV2",
+  "inputs": {
+   "prompt": "PROMPT_HERE",
+   "model": "gpt-image-2",
+   "model.size": "Custom",
+   "model.custom_width": 1024,
+   "model.custom_height": 1024,
+   "model.background": "opaque",
+   "model.quality": "medium",
+   "n": 1,
+   "seed": 0
+  },
+  "_meta": {
+   "title": "GPT Image 2"
+  }
+ },
+ "2": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "1",
+    0
+   ],
+   "filename_prefix": "autoqc/gpt_image2"
+  }
+ }
+}

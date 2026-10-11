@@ -1,0 +1,12 @@
+{
+  "name": "Elements → 영상 (Qwen 키프레임 + LTX-2.5)",
+  "category": "video",
+  "family": "elements",
+  "description": "@Element 참조 이미지(최대 10장)로 Qwen Edit가 첫 프레임(키프레임)을 만들고, LTX-2.5가 그 프레임에서 5초 영상을 이어 만듭니다. 1번 칸 = 제품, 2번 = 인물을 권장.",
+  "license": "Apache-2.0 + LTX-2 Community License",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (int8, 동적 로딩)",
+  "convertedFrom": "workflows/elements_to_video_ltx25.json (ComfyUI 0.39.2 프런트엔드로 API 변환)",
+  "originalPrompt": "Create the opening frame of a short commercial video. Show the product from image 1 held by the person from image 2, standing in a bright minimal studio, medium shot, eye level, soft key light from the left, clean background. Keep the product shape, color and details exactly as in image 1, and keep the person identity exactly as in image 2. No text, no logo changes.",
+  "notes": []
+}

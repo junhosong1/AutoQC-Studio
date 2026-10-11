@@ -1,0 +1,11 @@
+{
+  "name": "Ideogram 4 · 텍스트→이미지",
+  "category": "image",
+  "family": "ideogram",
+  "description": "글자·타이포그래피·레이아웃에 가장 강한 오픈 모델 (포스터, 배너, 패키지·라벨이 들어간 커머스 비주얼). 9.3B · 네이티브 2K.",
+  "license": "Ideogram 4 Non-Commercial (가중치) — 상업 사용은 별도 라이선스",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (fp8, 약 13GB — 동적 로딩)",
+  "convertedFrom": "ComfyUI 템플릿 (0.39.2 프런트엔드로 API 변환)",
+  "notes": []
+}

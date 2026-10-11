@@ -1,0 +1,49 @@
+{
+ "name": "GPT Image 2 · 레퍼런스 편집 (유료 API)",
+ "description": "상품 사진·참조 이미지를 넣고 장면을 바꿉니다 (최대 2장). 1024² medium 한 장 ≈ $0.07~0.09 (≈15~19크레딧, 참조 이미지 수에 따라). 라벨 글자 재현이 강한 편이에요.",
+ "category": "edit",
+ "cost": "paid",
+ "license": "OpenAI API (상업 이용 가능, 이용 약관 확인)",
+ "vram": "클라우드 (로컬 VRAM 사용 안 함)",
+ "seedMax": 2147483647,
+ "clamp": {
+  "node": "1",
+  "w": "model.custom_width",
+  "h": "model.custom_height",
+  "minPx": 655360,
+  "maxPx": 8294400,
+  "maxEdge": 3840,
+  "mult": 16
+ },
+ "params": [
+  {
+   "node": "1",
+   "input": "model.custom_width",
+   "label": "Width",
+   "type": "int",
+   "min": 480,
+   "max": 3840,
+   "step": 16
+  },
+  {
+   "node": "1",
+   "input": "model.custom_height",
+   "label": "Height",
+   "type": "int",
+   "min": 480,
+   "max": 3840,
+   "step": 16
+  },
+  {
+   "node": "1",
+   "input": "model.quality",
+   "label": "품질 (low ≈ 2크레딧 · medium ≈ 13 · high ≈ 53, 1024² 기준)",
+   "type": "select",
+   "options": [
+    "low",
+    "medium",
+    "high"
+   ]
+  }
+ ]
+}

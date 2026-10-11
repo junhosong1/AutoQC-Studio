@@ -1,0 +1,13 @@
+{
+  "75:37": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_2.1_int8_convrot.safetensors", "weight_dtype": "default"}, "_meta": {"title": "Load Diffusion Model"}},
+  "75:80": {"class_type": "QwenImage21Cache", "inputs": {"model": ["75:37", 0]}, "_meta": {"title": "Qwen Image 2.1 Cache [BETA]"}},
+  "75:66": {"class_type": "ModelSamplingAuraFlow", "inputs": {"shift": 3.1, "model": ["75:80", 0]}, "_meta": {"title": "ModelSamplingAuraFlow"}},
+  "75:38": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_8b_int8_convrot.safetensors", "type": "qwen_image", "device": "default"}, "_meta": {"title": "Load CLIP"}},
+  "75:6": {"class_type": "TextEncodeQwenImage21", "inputs": {"text": "PROMPT_HERE", "clip": ["75:38", 0]}, "_meta": {"title": "TextEncodeQwenImage 2.1"}},
+  "75:7": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["75:6", 0]}, "_meta": {"title": "ConditioningZeroOut"}},
+  "75:58": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1328, "height": 1328, "batch_size": 1}, "_meta": {"title": "EmptySD3LatentImage"}},
+  "75:3": {"class_type": "KSampler", "inputs": {"seed": 123, "steps": 20, "cfg": 2.5, "sampler_name": "euler", "scheduler": "simple", "denoise": 1, "model": ["75:66", 0], "positive": ["75:6", 0], "negative": ["75:7", 0], "latent_image": ["75:58", 0]}, "_meta": {"title": "KSampler"}},
+  "75:39": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_2.1_vae_bf16.safetensors"}, "_meta": {"title": "Load VAE"}},
+  "75:8": {"class_type": "VAEDecode", "inputs": {"samples": ["75:3", 0], "vae": ["75:39", 0]}, "_meta": {"title": "VAE Decode"}},
+  "60": {"class_type": "SaveImage", "inputs": {"filename_prefix": "autoqc", "images": ["75:8", 0]}, "_meta": {"title": "Save Image"}}
+}

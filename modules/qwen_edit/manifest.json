@@ -1,0 +1,12 @@
+{
+  "name": "Qwen Image Edit 2.1 · 레퍼런스 편집",
+  "category": "edit",
+  "family": "qwen",
+  "description": "상품 사진·참조 이미지를 넣고 장면, 배경, 조명을 바꿉니다. 상품은 실제 사진을 유지하는 게 원칙.",
+  "license": "Apache-2.0",
+  "cost": "local",
+  "vram": "RTX 3080 12GB (int8)",
+  "convertedFrom": "workflows/image_qwen_image_2_1_image_edit.json (ComfyUI 0.39.2 프런트엔드로 API 변환)",
+  "originalPrompt": "Replace costumes for the character",
+  "notes": []
+}
