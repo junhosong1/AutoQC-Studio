@@ -31,7 +31,7 @@ export interface ModuleDef {
 export interface Tone { id: string; label: string; text: string }
 export interface Settings {
   comfyUrl: string;
-  llm: { backend: 'lmstudio' | 'claude'; lmstudioUrl: string; lmstudioModel: string; claudeModel: string; anthropicKey: string; temperature: number };
+  llm: { backend: 'lmstudio' | 'openai' | 'claude'; lmstudioUrl: string; lmstudioModel: string; openaiUrl: string; openaiModel: string; openaiKey: string; claudeModel: string; anthropicKey: string; temperature: number; skillMode: 'auto' | 'compact' | 'full' | 'off'; qcMode: 'single' | 'split' };
   qc: { passScore: number; maxAttempts: number; minStd: number };
   vramSaver: boolean; outputDir: string; modelsDir: string; hfToken: string; civitaiToken: string; comfyApiKey?: string; tones: Tone[];
 }
@@ -43,8 +43,9 @@ export interface Status {
 export interface Attempt {
   n: number; seed: number; prompt: string; negative: string; promptSource: string;
   status: 'prompting' | 'generating' | 'reviewing' | 'passed' | 'failed' | 'done' | 'unchecked' | 'error' | 'canceled';
+  human?: 'accept' | 'reject';
   progress: number; file?: string; width?: number; height?: number; kind?: 'image' | 'video'; poster?: string; duration?: number; fps?: number; hasAudio?: boolean; score?: number; defects?: string[]; reason?: string;
-  stage?: 'rule' | 'llm' | 'keyframe'; retryStrategy?: 'prompt+seed' | 'seed' | 'prompt+seed+res'; error?: string;
+  stage?: 'rule' | 'llm' | 'keyframe'; retryStrategy?: 'prompt+seed' | 'seed' | 'prompt+seed+res' | 'motion+seed' | 'stop-source'; cause?: 'source' | 'motion' | 'none'; error?: string;
   phase?: 'keyframe' | 'video'; keyframe?: string; keyframeScore?: number;
   times: { prompt?: number; gen?: number; qc?: number; swap?: number };
   motionPrompt?: string;
@@ -65,7 +66,10 @@ export const fmtCr = (n: number) => n.toLocaleString('ko-KR');
 export const DEFECT_LABEL: Record<string, string> = {
   off_brief: '기획 불일치', product_distortion: '제품 변형', anatomy: '인체 파손', text_artifact: '깨진 글자',
   low_quality: '저품질', composition: '구도', brand_tone: '톤앤매너', motion_artifact: '영상 변형',
+  identity_drift: '인물·제품 동일성', slop_texture: '슬롭 질감', geometry_break: '구조 붕괴', unrequested_change: '요청 외 변경',
+  sheet_rule: '시트 규칙', location_rule: '로케이션 규칙',
 };
+export const QC_PROFILE_LABEL: Record<string, string> = { default: '일반', character_sheet: '캐릭터 시트', location: '로케이션' };
 
 export const isVideo = (file?: string) => !!file && /\.(mp4|webm|mov|mkv|gif)$/i.test(file);
 
@@ -111,6 +115,8 @@ export function loraFamily(name: string) { const f = LORA_FAMILIES.find(([, re])
 export function retryLabel(a: { retryStrategy?: string; keyframe?: string; stage?: string }, short = false) {
   if (a.retryStrategy === 'prompt+seed+res') return short ? '제품 크게·정면 + 해상도↑ + 새 시드' : '라벨 글자 깨짐 → 제품을 더 크게·정면으로 프롬프트 재작성 + 키프레임 해상도↑ + 새 시드';
   if (a.retryStrategy === 'prompt+seed') return short ? '프롬프트 수정 + 새 시드' : '검수 사유를 넣어 프롬프트 재작성 + 새 시드';
+  if (a.retryStrategy === 'motion+seed') return short ? '움직임 문장만 수정 + 새 시드' : '원본은 깨끗, 움직임에서 생긴 결함 → 움직임·카메라 문장만 고쳐 새 시드로';
+  if (a.retryStrategy === 'stop-source') return short ? '원본 문제 — 재시도 중단' : '시작 이미지/레퍼런스에 이미 있는 결함 → 다시 돌려도 같아서 재시도를 멈춤 (원본을 먼저 고쳐 주세요)';
   if (a.keyframe && a.stage !== 'keyframe') return short ? '키프레임 유지 + 영상 새 시드' : '통과한 키프레임은 그대로 두고 영상만 새 시드로';
   return short ? '새 시드' : '같은 프롬프트, 새 시드';
 }

@@ -90,7 +90,17 @@ export function estimateUsd(wf: ApiWorkflow): number | null {
     } else if (/^ByteDance2(FirstLastFrame|TextToVideo|Reference)/.test(c)) {
       const m = String(i.model ?? ''), res = String(i['model.resolution'] ?? '720p');
       const dur = Number(i['model.duration']) || 5;
-      if (/2\.5/.test(m)) { unknown = true; continue; }
+      if (/2\.5/.test(m)) {
+        // Seedance 2.5 (노드 가격 배지 식, 참조 영상 없음): 프레임당 단가 × (24×초+1) 프레임
+        const ratio = String(i['model.ratio'] ?? '16:9');
+        const is480 = res === '480p', is1080 = res === '1080p';
+        const perFrame = ratio === '1:1' ? (is480 ? 400 : is1080 ? 2025 : 900)
+          : ratio === '4:3' || ratio === '3:4' ? (is480 ? 411.25 : is1080 ? 2028 : 905.6719)
+          : ratio === '21:9' ? (is480 ? 418.5 : is1080 ? 2037.9648 : 904.3945)
+          : (is480 ? 400.3125 : is1080 ? 2025 : 900);
+        total += (Math.floor(perFrame * (24 * dur + 1)) / 1000) * (is1080 ? 0.016731 : 0.015301);
+        continue;
+      }
       const rate = res === '4k' ? 195200 : res === '1080p' ? 48800 : res === '720p' ? 21600 : 10044;
       const price = res === '4k' ? 0.00572 : res === '1080p' ? 0.011011 : /mini/i.test(m) ? 0.005005 : /fast/i.test(m) ? 0.008008 : 0.01001;
       total += (dur * rate * price) / 1000;

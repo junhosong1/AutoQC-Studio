@@ -356,3 +356,70 @@ html.win *{font-synthesis:none}
 .cost-warn{color:var(--fail);font-weight:600;font-size:11px}
 .job-h .cr{color:var(--accent);font-weight:600}
 button.chip{cursor:pointer}
+
+/* 제작 스킬 설정 */
+.skillbox{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg,#f7f8fa)}
+.skillfiles{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.qcpage .sec-head h2{font-size:17px;font-weight:700}
+.qcpage .sec-head .meta{font-size:12px;color:var(--sub);margin-top:3px}
+.qcpage .checks{display:flex;flex-wrap:wrap;gap:5px}
+.qcpage .checks span{font-size:11px;color:var(--fail);padding:3px 8px;border-radius:5px;background:var(--fail-bg)}
+.kpi2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:2px}
+.kpi2 span{display:flex;flex-direction:column;gap:1px;min-width:0}
+.kpi2 i{font-style:normal;font-size:11px;color:var(--mute)}
+.kpi2 b{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi2 b em{font-style:normal;font-size:11px;color:var(--mute);font-weight:500;margin-left:2px}
+
+/* 모듈 목록: 이름·실행 위치·상태만 한 줄, 누르면 그 자리에서 상세 */
+.mgroups{display:grid;gap:16px}
+.mgroup-h{font-size:12px;font-weight:700;color:var(--sub);margin:0 0 6px 2px;display:flex;align-items:center;gap:6px}
+.mgroup-h span{font-weight:600;color:var(--mute);background:var(--panel2);border-radius:10px;padding:1px 7px;font-size:11px}
+.mlist{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+.mrow+.mrow{border-top:1px solid var(--line)}
+.mrow-h{width:100%;display:grid;grid-template-columns:16px minmax(0,1fr) auto auto auto;align-items:center;gap:10px;padding:10px 14px;text-align:left;background:#fff}
+.mrow-h:hover{background:var(--panel2)}
+.mrow.open>.mrow-h{background:var(--panel2)}
+.mrow.off .mname{color:var(--sub)}
+.chev{color:var(--mute);font-size:11px}
+.mname{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcaps{font-size:11px;color:var(--mute);white-space:nowrap}
+.mrow .tag{min-width:62px;justify-content:center}
+.mprob{font-size:12px;color:var(--warn);line-height:1.5;padding:0 14px 10px 40px}
+.mrow-b .mprob{padding:0}
+.mrow-b{padding:4px 14px 14px 40px;display:grid;gap:10px;background:var(--panel2)}
+.mdesc{font-size:12px;color:var(--sub);line-height:1.6}
+.minfo{display:grid;grid-template-columns:72px 1fr;gap:4px 10px;font-size:12px}
+.minfo dt{color:var(--mute)}
+.minfo dd{color:var(--text);min-width:0;overflow-wrap:anywhere}
+.msub{font-size:11px;font-weight:700;color:var(--mute);margin-bottom:4px}
+.mnotes{list-style:none;display:grid;gap:3px;font-size:12px;color:var(--sub)}
+.mnotes li::before{content:"· ";color:var(--mute)}
+.mchips{display:flex;flex-wrap:wrap;gap:5px}
+.mchips span{font-size:11px;padding:2px 8px;border-radius:5px;background:#fff;border:1px solid var(--line);color:var(--sub)}
+@media (max-width:900px){.mcaps{display:none}.mrow-h{grid-template-columns:16px minmax(0,1fr) auto auto}}
+
+/* 시도별 내 판단 */
+.try{position:relative}
+.try .th{position:absolute;right:-4px;top:-4px;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:9px;font-style:normal;font-weight:700;color:#fff}
+.try .th.accept{background:var(--pass)}.try .th.reject{background:var(--fail)}
+.judge{border:1px solid var(--line);border-radius:10px;padding:10px;display:grid;gap:8px;background:var(--panel2)}
+.judge-h{display:flex;justify-content:space-between;font-size:12px;font-weight:600}
+.judge-r{font-size:12px;font-weight:600;text-align:center;padding:5px;border-radius:6px}
+.judge-r.ok{color:var(--pass);background:var(--pass-bg)}.judge-r.no{color:var(--fail);background:var(--fail-bg)}
+
+/* 결과 갤러리: 핀터레스트형 */
+.masonry{column-gap:12px}
+.pin{break-inside:avoid;margin:0 0 12px;position:relative;border-radius:12px;overflow:hidden;cursor:pointer;background:var(--well,#e7ebf0);box-shadow:0 0 0 1px rgba(0,0,0,.05)}
+.pin img,.pin video{display:block;width:100%;height:auto;object-fit:cover}
+.pin.fail img,.pin.fail video{filter:saturate(.6)}
+.pin.sel{box-shadow:0 0 0 3px var(--accent)}
+.pin .st{position:absolute;left:8px;top:8px;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+.pin .st.p{color:var(--pass)}.pin .st.x{color:var(--fail)}.pin .st.u{color:var(--warn)}.pin .st.g{color:var(--sub)}
+.pin .dur{position:absolute;right:8px;top:8px;font-size:10px;color:#fff;background:rgba(15,20,30,.6);padding:2px 6px;border-radius:5px}
+.pin .human{top:auto;bottom:8px;right:8px}
+.pin-ov{position:absolute;left:0;right:0;bottom:0;padding:34px 12px 11px;background:linear-gradient(rgba(10,14,22,0),rgba(10,14,22,.86) 45%);color:#fff;display:grid;gap:3px;opacity:0;transition:opacity .15s;pointer-events:none}
+.pin:hover .pin-ov{opacity:1}
+.pin:hover .human{opacity:0}
+.pin-ov b{font-size:12px;font-weight:600;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pin-ov small{font-size:11px;opacity:.8;line-height:1.4}
+.pin-ov .why{opacity:.95;color:#ffd0d0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}

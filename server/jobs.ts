@@ -14,8 +14,8 @@ import { randomUUID } from 'node:crypto';
 import { DATA_DIR, getSettings, outputRoot } from './config.js';
 import { Comfy } from './comfy.js';
 import { ModuleDef, applyToWorkflow, getModule, keyframeOnly, videoFromKeyframe } from './modules.js';
-import { DEFECT_CODES, PROMPT_DEFECTS, enhanceMotionPrompt, enhancePrompt, reviewImage, unloadLlm } from './llm.js';
-import { decode, precheck, toJpeg } from './qc.js';
+import { DEFECT_CODES, PROMPT_DEFECTS, QcProfile, enhanceMotionPrompt, enhancePrompt, review, unloadLlm } from './llm.js';
+import { decode, precheck, profileCheck, toJpeg } from './qc.js';
 import { frameStrip, isVideoFile, posterJpeg } from './video.js';
 
 export type AttemptStatus = 'prompting' | 'generating' | 'reviewing' | 'passed' | 'failed' | 'done' | 'unchecked' | 'error' | 'canceled';
@@ -40,7 +40,9 @@ export interface Attempt {
   defects?: string[];
   reason?: string;
   stage?: 'rule' | 'llm' | 'keyframe';
-  retryStrategy?: 'prompt+seed' | 'seed' | 'prompt+seed+res';
+  retryStrategy?: 'prompt+seed' | 'seed' | 'prompt+seed+res' | 'motion+seed' | 'stop-source';
+  /** 영상 결함 원인 진단 (shot-prep): source = 입력 에셋 문제, motion = 움직임 지시 문제 */
+  cause?: 'source' | 'motion' | 'none';
   /** 키프레임 → 영상 2단계 모듈: 지금 단계와 키프레임 파일 */
   phase?: 'keyframe' | 'video';
   keyframe?: string;
@@ -48,6 +50,8 @@ export interface Attempt {
   error?: string;
   times: { prompt?: number; gen?: number; qc?: number; swap?: number };
   motionPrompt?: string;
+  /** 사람 판정 (이 시도 결과를 쓸 만한지) — 검수 판정과 비교해 검수 신뢰도 계산 */
+  human?: 'accept' | 'reject';
 }
 
 export interface Item {
@@ -84,6 +88,8 @@ export interface JobRequest {
   images?: (string | null)[];
   params?: Record<string, any>;
   qc: { enabled: boolean; passScore: number; maxAttempts: number };
+  /** 검수 프로필 = 만드는 에셋 종류: default / character_sheet(캐릭터 시트) / location(로케이션) */
+  qcProfile?: QcProfile;
 }
 
 export interface Job extends JobRequest {
@@ -170,7 +176,8 @@ export function createJob(req: JobRequest, comfy: Comfy): Job {
     toneText: tone?.text ?? '',
     toneLabel: tone?.label ?? '',
     llmBackend: s.llm.backend,
-    llmModel: s.llm.backend === 'claude' ? s.llm.claudeModel : s.llm.lmstudioModel,
+    llmModel: s.llm.backend === 'claude' ? s.llm.claudeModel : s.llm.backend === 'openai' ? s.llm.openaiModel : s.llm.lmstudioModel,
+    qcProfile: (['default', 'character_sheet', 'location'] as const).includes(req.qcProfile as any) ? req.qcProfile : 'default',
     status: 'queued',
     items: Array.from({ length: count }, (_, i) => ({ index: i, status: 'queued', attempts: [] })),
   };
@@ -223,11 +230,16 @@ export function deleteJob(id: string) {
   return { removed };
 }
 
-export function setHuman(jobId: string, index: number, value: 'accept' | 'reject' | null) {
+/** 사람 판정은 시도 단위 (시도마다 검수 판정이 따로 있으니까). 최종 컷이면 항목 판정(갤러리 필터용)도 같이 */
+export function setHuman(jobId: string, index: number, value: 'accept' | 'reject' | null, attempt?: number) {
   const j = getJob(jobId);
   const it = j?.items[index];
   if (!j || !it) throw new Error('항목을 찾을 수 없어요');
-  if (value) it.human = value; else delete it.human;
+  const ai = attempt ?? it.final ?? it.attempts.length - 1;
+  const a = it.attempts[ai];
+  if (!a) throw new Error('시도를 찾을 수 없어요');
+  if (value) a.human = value; else delete a.human;
+  if (ai === (it.final ?? it.attempts.length - 1)) { if (value) it.human = value; else delete it.human; }
   persistAll();
   emit(j);
   return it;
@@ -295,6 +307,8 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
   let llmLoaded = false;
   let motion = job.motion?.trim() ?? '';
   let needMotion = !!(m.prompt2 && motion && job.enhance && !/^use the provided start image/i.test(motion));
+  const seedance = !!m.workflow && Object.values<any>(m.workflow).some((x) => /^ByteDance2/.test(x.class_type));
+  const pOpt = { seedance, profile: job.qcProfile };
   // 참조 이미지 번호별 설명 (LLM이 image 1/2/3을 정확히 가리키도록)
   const refLabels = (job.images ?? []).map((x, i) => (x ? (m.images[i]?.label ?? `참조 ${i + 1}`).replace(/^@Element\s*\d+\s*·?\s*/, '') || '참조 이미지' : null)).filter((x): x is string => x !== null)
     .map((l) => (/^(제품|인물|배경\/공간|스타일|\d+)$/.test(l) ? `${l} (default slot role — the brief decides)` : l));
@@ -320,9 +334,9 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
         const isVid = m.category === 'video';
         const motionOnly = isVid && m.images.length > 0 && !m.prompt2 && !m.keyframe && m.promptStyle !== 'ref-video';
         const r = motionOnly
-          ? { positive: await enhanceMotionPrompt(job.brief + (feedback ? `\nREVIEWER FEEDBACK ON PREVIOUS CLIP: ${feedback}` : ''), job.toneText, !!job.labelSafe, m.refToken), negative: '' }
+          ? { positive: await enhanceMotionPrompt(job.brief + (feedback ? `\nREVIEWER FEEDBACK ON PREVIOUS CLIP: ${feedback}` : ''), job.toneText, !!job.labelSafe, m.refToken, pOpt), negative: '' }
           // 영상(텍스트→영상, 레퍼런스→영상)은 영상용 프롬프트, Elements 키프레임·이미지 모듈은 이미지용
-          : await enhancePrompt(job.brief, job.toneText, feedback, hasRefs ? refLabels : false, { video: isVid && !m.keyframe, refToken: m.refToken });
+          : await enhancePrompt(job.brief, job.toneText, feedback, hasRefs ? refLabels : false, { video: isVid && !m.keyframe, refToken: m.refToken, ...pOpt });
         prompt = r.positive;
         if (!job.negative) negative = r.negative;
         promptSource = feedback ? 'llm-retry' : 'llm';
@@ -340,7 +354,7 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
     // 1-2) 영상 움직임 프롬프트 (한 번만)
     if (needMotion) {
       const tp = Date.now();
-      try { motion = await enhanceMotionPrompt(motion, job.toneText, !!job.labelSafe); llmLoaded = true; }
+      try { motion = await enhanceMotionPrompt(motion, job.toneText, !!job.labelSafe, undefined, pOpt); llmLoaded = true; }
       catch (e: any) { a.reason = (a.reason ? a.reason + ' / ' : '') + '모션 프롬프트 확장 실패 — 입력 그대로 사용'; }
       a.times.prompt = (a.times.prompt ?? 0) + sec(tp);
       needMotion = false;
@@ -387,7 +401,7 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
         } else {
           try {
             if (s.vramSaver) await comfy.free();
-            const r = await reviewImage(toJpeg(kimg!), job.brief || prompt, job.toneText, prompt, false, hasRefs);
+            const r = await review(toJpeg(kimg!), { brief: job.brief || prompt, tone: job.toneText, prompt, refs: hasRefs, modelHint: m.name });
             llmLoaded = true;
             if (r.score >= job.qc.passScore && r.defects.length === 0) a.keyframeScore = r.score;
             else { kfFailed = true; Object.assign(a, { status: 'failed', score: r.score, defects: r.defects, reason: '[키프레임] ' + r.reason, stage: 'keyframe' }); }
@@ -410,7 +424,7 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
       const pid = await comfy.queue(wf);
       const entry = await comfy.wait(pid, (p) => { a.progress = p; emit(job, false); }, (m.category === 'video' ? 60 : 15) * 60 * 1000, () => !!job.cancel);
       const refs = comfy.outputImages(entry);
-      if (!refs.length) throw new Error('ComfyUI 결과에 이미지·영상이 없어요');
+      if (!refs.length) throw new Error('ComfyUI 결과에 이미지·영상이 없어요 — 저장 노드가 실행되지 않았어요. ComfyUI 콘솔에서 누락된 모델·LoRA 파일이나 노드 오류를 확인해 주세요');
       const buf = await comfy.fetchImage(refs[0]);
       const ext = refs[0].filename.split('.').pop() || 'png';
       const rel = path.join(relDir, `${String(item.index + 1).padStart(2, '0')}_try${n}.${ext}`);
@@ -450,6 +464,11 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
       const pre = video
         ? (strip ? precheck(decode(strip), undefined, undefined, s.qc.minStd) : { passed: false, defects: [] as string[], reason: a.reason ?? '프레임 추출 실패', std: null })
         : precheck(img, m.size ? job.width ?? m.size.width : undefined, m.size ? job.height ?? m.size.height : undefined, s.qc.minStd);
+      // 캐릭터 시트·로케이션: 픽셀로 확실히 잡히는 규칙 (배경색, 노출 클리핑)은 코드가 먼저
+      if (!video && pre.passed && job.qcProfile && job.qcProfile !== 'default') {
+        const pc = profileCheck(img, job.qcProfile);
+        if (pc) Object.assign(pre, { passed: false, defects: pc.defects, reason: pc.reason });
+      }
       if (video && !strip) {
         Object.assign(a, { status: 'unchecked', stage: 'rule' });
         a.times.qc = sec(tq);
@@ -462,10 +481,10 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
         // 4) LLM 검수
         try {
           if (s.vramSaver) await comfy.free();
-          const r = await reviewImage(video ? strip! : toJpeg(img!), job.brief || prompt, job.toneText, prompt, video, hasRefs, video && stripHasRef);
+          const r = await review(video ? strip! : toJpeg(img!), { brief: job.brief || prompt, tone: job.toneText, prompt, video, refs: hasRefs, refPanel: video && stripHasRef, profile: video ? 'default' : job.qcProfile, modelHint: m.name });
           llmLoaded = true;
           const passed = r.score >= job.qc.passScore && r.defects.length === 0;
-          Object.assign(a, { status: passed ? 'passed' : 'failed', score: r.score, defects: r.defects, reason: r.reason + ((pre as any).warn ? ` (참고: ${(pre as any).warn})` : ''), stage: 'llm' });
+          Object.assign(a, { status: passed ? 'passed' : 'failed', score: r.score, defects: r.defects, reason: r.reason + ((pre as any).warn ? ` (참고: ${(pre as any).warn})` : ''), stage: 'llm', cause: passed ? undefined : r.cause });
         } catch (e: any) {
           console.warn('[qc] LLM 검수 실패:', e.message);
           Object.assign(a, { status: 'unchecked', reason: 'LLM 검수 실패 — 검수 모델이 형식에 맞는 답을 주지 않았어요 (결과물은 정상 저장)', stage: 'llm' });
@@ -505,6 +524,25 @@ async function runItem(job: Job, item: Item, comfy: Comfy, relDir: string) {
       needPrompt = promptFix || (labelFix && job.enhance);
       if (needPrompt && a.stage !== 'keyframe' && (a.defects ?? []).every((d) => d === 'text_artifact' || d === 'motion_artifact' || d === 'low_quality')) { /* 영상 단계의 글자·모션 문제는 키프레임 유지, 프롬프트도 그대로 */ needPrompt = false; }
       if (keptKf && m.keyframe && !needPrompt) a.retryStrategy = 'seed';
+      // shot-prep 8장: 영상 결함의 원인으로 고칠 곳을 정함 (가장 앞에서 깨진 단계를 고친다)
+      if (a.kind === 'video' && a.cause === 'source') {
+        if (m.keyframe) {
+          // 키프레임 자체가 원인 → 키프레임부터 다시
+          keptKf = null; needPrompt = job.enhance; a.retryStrategy = job.enhance ? 'prompt+seed' : 'seed';
+          feedback += ' | FIX THE SOURCE: the defect is already in the key frame; rebuild the key frame.';
+        } else if (m.images.length && (job.images ?? []).some(Boolean)) {
+          // 넣어 준 시작 이미지·레퍼런스에 이미 결함 → 다시 돌려도 같은 결과 (크레딧 낭비) → 중단
+          a.retryStrategy = 'stop-source';
+          a.reason = `[원본 문제] ${a.reason ?? ''} — 시작 이미지/레퍼런스에 이미 있는 결함이라 재생성으로는 고쳐지지 않아요. 원본을 먼저 고쳐 주세요.`;
+          emit(job);
+          break;
+        }
+      } else if (a.kind === 'video' && a.cause === 'motion' && job.enhance) {
+        // 원본은 깨끗, 움직임에서만 생긴 결함 → 움직임·카메라 문장만 고쳐서 다시
+        needPrompt = !m.prompt2; needMotion = !!m.prompt2 && !!job.motion?.trim(); if (needMotion) motion = job.motion!.trim() + `\nREVIEWER FEEDBACK ON PREVIOUS CLIP: ${feedback}`;
+        a.retryStrategy = 'motion+seed';
+        feedback += ' | FIX ONLY THE MOTION: keep the look of the first frame and references; revise the action and camera clause (simpler, slower, physically plausible movement).';
+      }
     }
   }
 
@@ -549,37 +587,36 @@ function needPromptNext(a: Attempt) {
 }
 
 // ── 통계 ──────────────────────────────────────────────────
-export function stats() {
-  const finished = jobs.filter((j) => j.status === 'done' || j.status === 'canceled' || j.status === 'error');
-  const items = finished.flatMap((j) => j.items.map((it) => ({ j, it }))).filter(({ it }) => it.attempts.some((a) => a.file));
+type StatItem = { j: Job; it: Item };
+
+/** 작업이 이미지인지 영상인지 (요청 탭 → 모듈 종류 → 결과 파일 확장자 순서) */
+function kindOf(j: Job, it?: Item): 'image' | 'video' {
+  if (j.kind) return j.kind;
+  const m = getModule(j.moduleId);
+  if (m) return m.category === 'video' ? 'video' : 'image';
+  const f = it?.attempts.find((a) => a.file)?.file;
+  return f && isVideoFile(f) ? 'video' : 'image';
+}
+
+const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length) * 10) / 10 : null);
+
+/** 컷 묶음 하나의 요약 (전체 / 이미지 / 영상 각각에 같은 계산) */
+function summarize(items: StatItem[]) {
   const qcItems = items.filter(({ j }) => j.qc.enabled);
   const reviewed = qcItems.filter(({ it }) => it.status === 'passed' || it.status === 'failed');
   const firstPass = reviewed.filter(({ it }) => it.attempts[0]?.status === 'passed').length;
   const finalPass = reviewed.filter(({ it }) => it.status === 'passed').length;
   const allAttempts = items.flatMap(({ it }) => it.attempts).filter((a) => a.file);
-  const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((s, x) => s + x, 0) / xs.length) * 10) / 10 : null);
   const defects: Record<string, number> = Object.fromEntries(Object.keys(DEFECT_CODES).map((k) => [k, 0]));
-  let ruleFails = 0, llmFails = 0, promptRetries = 0, seedRetries = 0;
+  let ruleFails = 0, llmFails = 0, promptRetries = 0, seedRetries = 0, motionRetries = 0, sourceStops = 0;
   for (const a of allAttempts) {
     if (a.status === 'failed') { a.stage === 'rule' ? ruleFails++ : llmFails++; for (const d of a.defects ?? []) defects[d] = (defects[d] ?? 0) + 1; }
-    if (a.retryStrategy === 'prompt+seed') promptRetries++;
+    if (a.retryStrategy === 'prompt+seed' || a.retryStrategy === 'prompt+seed+res') promptRetries++;
     if (a.retryStrategy === 'seed') seedRetries++;
+    if (a.retryStrategy === 'motion+seed') motionRetries++;
+    if (a.retryStrategy === 'stop-source') sourceStops++;
   }
-  // 사람 판정과 검수 판정 비교 (검수 신뢰도)
-  const labeled = reviewed.filter(({ it }) => it.human);
-  const agree = labeled.filter(({ it }) => (it.human === 'accept') === (it.status === 'passed')).length;
-  const falsePass = labeled.filter(({ it }) => it.status === 'passed' && it.human === 'reject').length;
-  const falseFail = labeled.filter(({ it }) => it.status === 'failed' && it.human === 'accept').length;
-
-  const byModule: Record<string, { name: string; items: number; passed: number; avgSec: number | null }> = {};
-  for (const { j, it } of items) {
-    const b = (byModule[j.moduleId] ??= { name: j.moduleName, items: 0, passed: 0, avgSec: null });
-    b.items++; if (it.status === 'passed') b.passed++;
-  }
-  for (const id of Object.keys(byModule)) byModule[id].avgSec = avg(items.filter(({ j }) => j.moduleId === id).map(({ it }) => it.totalSec ?? 0));
-
   return {
-    jobs: finished.length,
     items: items.length,
     attempts: allAttempts.length,
     reviewedItems: reviewed.length,
@@ -587,13 +624,44 @@ export function stats() {
     finalPassRate: reviewed.length ? finalPass / reviewed.length : null,
     avgAttempts: avg(reviewed.map(({ it }) => it.attempts.length)),
     avgItemSec: avg(items.map(({ it }) => it.totalSec ?? 0)),
+    medianItemSec: (() => { const xs = items.map(({ it }) => it.totalSec ?? 0).sort((a, b) => a - b); return xs.length ? xs[Math.floor(xs.length / 2)] : null; })(),
     avgGenSec: avg(allAttempts.map((a) => a.times.gen ?? 0).filter(Boolean)),
     avgQcSec: avg(allAttempts.map((a) => a.times.qc ?? 0).filter(Boolean)),
     avgPromptSec: avg(allAttempts.map((a) => a.times.prompt ?? 0).filter(Boolean)),
     avgSwapSec: avg(allAttempts.map((a) => a.times.swap ?? 0).filter(Boolean)),
     blocked: ruleFails + llmFails,
-    ruleFails, llmFails, promptRetries, seedRetries,
+    ruleFails, llmFails, promptRetries, seedRetries, motionRetries, sourceStops,
     defects,
+  };
+}
+
+export function stats() {
+  const finished = jobs.filter((j) => j.status === 'done' || j.status === 'canceled' || j.status === 'error');
+  const items: StatItem[] = finished.flatMap((j) => j.items.map((it) => ({ j, it }))).filter(({ it }) => it.attempts.some((a) => a.file));
+  const all = summarize(items);
+  // 이미지와 영상은 시간·통과율의 성격이 완전히 달라서 따로 집계 (섞으면 어느 쪽도 대표하지 못함)
+  const byKind = {
+    image: summarize(items.filter(({ j, it }) => kindOf(j, it) === 'image')),
+    video: summarize(items.filter(({ j, it }) => kindOf(j, it) === 'video')),
+  };
+  // 사람 판정과 검수 판정 비교 (검수 신뢰도) — 시도 단위. 예전 기록(항목 단위 판정)은 최종 시도의 판정으로 봄
+  const labeled = items.filter(({ j }) => j.qc.enabled).flatMap(({ it }) => it.attempts.map((a, i) => ({ a, h: a.human ?? (i === it.final ? it.human : undefined) })))
+    .filter(({ a, h }) => h && (a.status === 'passed' || a.status === 'failed'));
+  const agree = labeled.filter(({ a, h }) => (h === 'accept') === (a.status === 'passed')).length;
+  const falsePass = labeled.filter(({ a, h }) => a.status === 'passed' && h === 'reject').length;
+  const falseFail = labeled.filter(({ a, h }) => a.status === 'failed' && h === 'accept').length;
+
+  const byModule: Record<string, { name: string; kind: 'image' | 'video'; items: number; passed: number; avgSec: number | null }> = {};
+  for (const { j, it } of items) {
+    const b = (byModule[j.moduleId] ??= { name: j.moduleName, kind: kindOf(j, it), items: 0, passed: 0, avgSec: null });
+    b.items++; if (it.status === 'passed') b.passed++;
+  }
+  for (const id of Object.keys(byModule)) byModule[id].avgSec = avg(items.filter(({ j }) => j.moduleId === id).map(({ it }) => it.totalSec ?? 0));
+
+  return {
+    jobs: finished.length,
+    ...all,
+    byKind,
     human: { labeled: labeled.length, agree, falsePass, falseFail, agreement: labeled.length ? agree / labeled.length : null },
     byModule,
   };
@@ -614,7 +682,16 @@ export function reportMarkdown() {
     `| 평균 시도 횟수 | ${s.avgAttempts ?? '-'} |`, `| 컷당 평균 소요 | ${s.avgItemSec ?? '-'}초 |`,
     `| 평균 생성 / 검수 / 프롬프트 | ${s.avgGenSec ?? '-'}초 / ${s.avgQcSec ?? '-'}초 / ${s.avgPromptSec ?? '-'}초 |`,
     `| 검수가 막은 불량 | ${s.blocked}건 (규칙 ${s.ruleFails} · LLM ${s.llmFails}) |`,
-    `| 재시도 전략 | 프롬프트 재작성 ${s.promptRetries}회 · 시드 변경 ${s.seedRetries}회 |`,
+    `| 재시도 전략 | 프롬프트 재작성 ${s.promptRetries}회 · 시드 변경 ${s.seedRetries}회 · 움직임 문장 수정 ${s.motionRetries}회 · 원본 문제로 중단 ${s.sourceStops}회 |`,
+    ``,
+    `## 이미지 / 영상 분리`,
+    `| 항목 | 이미지 | 영상 |`, `|---|---|---|`,
+    `| 최종 컷 | ${s.byKind.image.items} | ${s.byKind.video.items} |`,
+    `| 첫 시도 통과율 | ${pct(s.byKind.image.firstPassRate)} | ${pct(s.byKind.video.firstPassRate)} |`,
+    `| 최종 통과율 | ${pct(s.byKind.image.finalPassRate)} | ${pct(s.byKind.video.finalPassRate)} |`,
+    `| 평균 시도 횟수 | ${s.byKind.image.avgAttempts ?? '-'} | ${s.byKind.video.avgAttempts ?? '-'} |`,
+    `| 컷당 평균 소요 (중앙값) | ${s.byKind.image.avgItemSec ?? '-'}초 (${s.byKind.image.medianItemSec ?? '-'}초) | ${s.byKind.video.avgItemSec ?? '-'}초 (${s.byKind.video.medianItemSec ?? '-'}초) |`,
+    `| 평균 생성 / 검수 / 프롬프트 | ${s.byKind.image.avgGenSec ?? '-'} / ${s.byKind.image.avgQcSec ?? '-'} / ${s.byKind.image.avgPromptSec ?? '-'}초 | ${s.byKind.video.avgGenSec ?? '-'} / ${s.byKind.video.avgQcSec ?? '-'} / ${s.byKind.video.avgPromptSec ?? '-'}초 |`,
     ``,
     `## 결함 유형`,
     `| 코드 | 설명 | 건수 |`, `|---|---|---|`,
@@ -625,8 +702,8 @@ export function reportMarkdown() {
     `| ${s.human.labeled} | ${pct(s.human.agreement)} | ${s.human.falsePass} | ${s.human.falseFail} |`,
     ``,
     `## 모듈별`,
-    `| 모듈 | 컷 | 통과 | 평균 소요 |`, `|---|---|---|---|`,
-    ...Object.values(s.byModule).map((b) => `| ${b.name} | ${b.items} | ${b.passed} | ${b.avgSec ?? '-'}초 |`),
+    `| 모듈 | 종류 | 컷 | 통과 | 평균 소요 |`, `|---|---|---|---|---|`,
+    ...Object.values(s.byModule).sort((x, y) => x.kind.localeCompare(y.kind)).map((b) => `| ${b.name} | ${b.kind === 'video' ? '영상' : '이미지'} | ${b.items} | ${b.passed} | ${b.avgSec ?? '-'}초 |`),
   ];
   return lines.join('\n') + '\n';
 }

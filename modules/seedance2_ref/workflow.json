@@ -1,0 +1,109 @@
+{
+ "1": {
+  "class_type": "ByteDance2ReferenceNode",
+  "inputs": {
+   "model": "Seedance 2.0",
+   "model.prompt": "PROMPT_HERE",
+   "model.resolution": "720p",
+   "model.ratio": "adaptive",
+   "model.duration": 5,
+   "model.generate_audio": true,
+   "model.auto_downscale": true,
+   "seed": 0,
+   "watermark": false,
+   "model.reference_images.image_1": [
+    "10",
+    0
+   ],
+   "model.reference_images.image_2": [
+    "11",
+    0
+   ],
+   "model.reference_images.image_3": [
+    "12",
+    0
+   ],
+   "model.reference_images.image_4": [
+    "13",
+    0
+   ],
+   "model.reference_images.image_5": [
+    "14",
+    0
+   ],
+   "model.reference_images.image_6": [
+    "15",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Seedance 2.0 레퍼런스→영상"
+  }
+ },
+ "10": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 1"
+  }
+ },
+ "11": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 2"
+  }
+ },
+ "12": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 3"
+  }
+ },
+ "13": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 4"
+  }
+ },
+ "14": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 5"
+  }
+ },
+ "15": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "example.png"
+  },
+  "_meta": {
+   "title": "레퍼런스 6"
+  }
+ },
+ "2": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "1",
+    0
+   ],
+   "filename_prefix": "video/autoqc_seedance2_ref",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

@@ -1,7 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { AppCtx } from '../App';
 import { DEFECT_LABEL, Item, Job, fileUrl, isVideo } from '../api';
-import Media from '../components/Media';
 import ItemDetail from '../components/ItemDetail';
 
 type Filter = 'all' | 'passed' | 'failed' | 'unchecked' | 'accept' | 'reject';
@@ -14,12 +13,41 @@ function ratioLabel(w?: number, h?: number) {
   return k ? k[0] : `${w}×${h}`;
 }
 
+type Entry = { j: Job; it: Item; a: NonNullable<Item['attempts'][number]> };
+
+/** 핀터레스트형 카드: 원본 비율 그대로, 올리면 설명이 뜨고 영상은 재생 */
+function Pin({ e, sel, onClick }: { e: Entry; sel: boolean; onClick: () => void }) {
+  const { j, it, a } = e;
+  const vid = isVideo(a.file);
+  const ref = useRef<HTMLVideoElement>(null);
+  const st = it.status === 'passed' ? ['p', `PASS ${a.score}`] : it.status === 'failed' ? ['x', `FAIL ${a.score ?? ''}`] : it.status === 'unchecked' ? ['u', '미검수'] : ['g', '검수 끔'];
+  const h = a.human ?? it.human;
+  const ar = a.width && a.height ? `${a.width} / ${a.height}` : '1 / 1';
+  return (
+    <div className={'pin' + (sel ? ' sel' : '') + (it.status === 'failed' ? ' fail' : '')} onClick={onClick}
+      onMouseEnter={() => ref.current?.play().catch(() => {})}
+      onMouseLeave={() => { const v = ref.current; if (v) { v.pause(); v.currentTime = 0; } }}>
+      {vid
+        ? <video ref={ref} src={fileUrl(a.file)} poster={a.poster ? fileUrl(a.poster) : undefined} muted loop playsInline preload="none" style={{ aspectRatio: ar }} />
+        : <img src={fileUrl(a.file)} alt="" loading="lazy" style={{ aspectRatio: ar }} />}
+      <span className={'st ' + st[0]}>{st[1]}{it.attempts.length > 1 ? ` · ${it.attempts.length}회` : ''}</span>
+      {h && <span className={'human ' + h}>{h === 'accept' ? '✓' : '✕'}</span>}
+      {vid && <span className="dur">▶ {a.duration ? a.duration.toFixed(1) + '초' : '영상'}</span>}
+      <div className="pin-ov">
+        <b>{j.brief || j.moduleName}</b>
+        <small>{j.moduleName} · {ratioLabel(a.width, a.height)} · {new Date(j.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small>
+        {(a.defects?.length || a.reason) ? <small className="why">{a.defects?.length ? a.defects.map((d) => DEFECT_LABEL[d] ?? d).join(', ') + ' — ' : ''}{a.reason}</small> : null}
+      </div>
+    </div>
+  );
+}
+
 export default function Gallery({ ctx }: { ctx: AppCtx }) {
   const { jobs, toast } = ctx;
   const [filter, setFilter] = useState<Filter>('all');
   const [defect, setDefect] = useState('');
   const [media, setMedia] = useState<'all' | 'image' | 'video'>('all');
-  const [rowH, setRowH] = useState(170);
+  const [colW, setColW] = useState(230);
   const [sel, setSel] = useState<{ jobId: string; index: number } | null>(null);
 
   const everything = useMemo(() => jobs.flatMap((j) => j.items.map((it) => ({ j, it, a: it.final !== undefined ? it.attempts[it.final] : undefined }))).filter((x) => x.a?.file), [jobs]);
@@ -30,22 +58,17 @@ export default function Gallery({ ctx }: { ctx: AppCtx }) {
     passed: all.filter((x) => x.it.status === 'passed').length,
     failed: all.filter((x) => x.it.status === 'failed').length,
     unchecked: all.filter((x) => x.it.status === 'unchecked' || x.it.status === 'done').length,
-    accept: all.filter((x) => x.it.human === 'accept').length,
-    reject: all.filter((x) => x.it.human === 'reject').length,
+    accept: all.filter((x) => (x.a!.human ?? x.it.human) === 'accept').length,
+    reject: all.filter((x) => (x.a!.human ?? x.it.human) === 'reject').length,
   };
   const shown = all.filter(({ it }) => {
     if (filter === 'passed' && it.status !== 'passed') return false;
     if (filter === 'failed' && it.status !== 'failed') return false;
     if (filter === 'unchecked' && it.status !== 'unchecked' && it.status !== 'done') return false;
-    if ((filter === 'accept' || filter === 'reject') && it.human !== filter) return false;
+    if ((filter === 'accept' || filter === 'reject') && (it.attempts[it.final ?? -1]?.human ?? it.human) !== filter) return false;
     if (defect && !it.attempts.some((a) => a.defects?.includes(defect))) return false;
     return true;
   });
-  const groups: { j: Job; list: typeof shown }[] = [];
-  for (const x of shown) {
-    const g = groups.find((g) => g.j.id === x.j.id);
-    g ? g.list.push(x) : groups.push({ j: x.j, list: [x] });
-  }
   const selJob = sel ? jobs.find((j) => j.id === sel.jobId) : undefined;
   const selItem: Item | undefined = selJob?.items[sel!.index];
 
@@ -63,37 +86,21 @@ export default function Gallery({ ctx }: { ctx: AppCtx }) {
             <button className={media === 'video' ? 'on' : ''} style={{ padding: '6px 12px' }} onClick={() => setMedia('video')}>영상 {nVideo}</button>
           </div>
           <F id="all" label="전체" /><F id="passed" label="통과" cls="p" /><F id="failed" label="실패" cls="x" /><F id="unchecked" label="미검수" cls="u" />
-          <F id="accept" label="채택" /><F id="reject" label="반려" />
+          <F id="accept" label="쓸 만함" /><F id="reject" label="못 씀" />
           <select className="select" style={{ width: 150, padding: '6px 10px', fontSize: 12 }} value={defect} onChange={(e) => setDefect(e.target.value)}>
             <option value="">결함 유형: 전체</option>
             {Object.entries(DEFECT_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
-          <div className="row small muted" style={{ marginLeft: 'auto', width: 190, whiteSpace: 'nowrap' }}>크기<input type="range" min={110} max={300} value={rowH} onChange={(e) => setRowH(Number(e.target.value))} /></div>
+          <div className="row small muted" style={{ marginLeft: 'auto', width: 190, whiteSpace: 'nowrap' }}>크기<input type="range" min={160} max={380} value={colW} onChange={(e) => setColW(Number(e.target.value))} /></div>
         </div>
         <div className="scroll">
-          {!shown.length && <div className="empty"><b>표시할 결과가 없어요</b>[이미지 생성] 탭에서 생성하면 여기에 모여요. 비율이 달라도 원본 비율 그대로 줄 맞춰 보여줘요.</div>}
-          {groups.map(({ j, list }) => (
-            <div key={j.id}>
-              <div className="grp">{new Date(j.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {j.brief.slice(0, 40) || j.moduleName}<span>{list.length}장 · {j.moduleName}</span></div>
-              <div className="rowwrap">
-                {list.map(({ it, a }) => {
-                  const r = a!.width && a!.height ? a!.width / a!.height : 1;
-                  const st = it.status === 'passed' ? ['p', `PASS ${a!.score}`] : it.status === 'failed' ? ['x', 'FAIL'] : it.status === 'unchecked' ? ['u', '미검수'] : ['g', '검수 끔'];
-                  const isSel = sel?.jobId === j.id && sel.index === it.index;
-                  return (
-                    <div key={it.index} className={'it' + (it.status === 'failed' ? ' fail' : '') + (isSel ? ' sel' : '')}
-                      style={{ height: rowH, flexGrow: r, flexBasis: r * rowH, backgroundImage: `url("${fileUrl(isVideo(a!.file) ? a!.poster : a!.file)}")` }}
-                      onClick={() => setSel(isSel ? null : { jobId: j.id, index: it.index })}>
-                      {isVideo(a!.file) && <Media file={a!.file} poster={a!.poster} />}
-                      <span className={'st ' + st[0]}>{st[1]}{it.attempts.length > 1 ? ` · ${it.attempts.length}회` : ''}</span>
-                      {it.human && <span className={'human ' + it.human}>{it.human === 'accept' ? '✓' : '✕'}</span>}
-                      <span className="ratio">{isVideo(a!.file) ? `▶ ${a!.duration ? a!.duration.toFixed(1) + '초 · ' : ''}` : ''}{ratioLabel(a!.width, a!.height)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+          {!shown.length && <div className="empty"><b>표시할 결과가 없어요</b>[이미지 생성] 탭에서 생성하면 여기에 모여요. 원본 비율 그대로 보여주고, 마우스를 올리면 설명이 뜨고 영상은 재생돼요.</div>}
+          <div className="masonry" style={{ columnWidth: colW }}>
+            {shown.map((e) => {
+              const isSel = sel?.jobId === e.j.id && sel.index === e.it.index;
+              return <Pin key={e.j.id + ':' + e.it.index} e={e as Entry} sel={isSel} onClick={() => setSel(isSel ? null : { jobId: e.j.id, index: e.it.index })} />;
+            })}
+          </div>
         </div>
       </section>
       {selJob && selItem && (

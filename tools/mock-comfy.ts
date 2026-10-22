@@ -126,7 +126,22 @@ http.createServer(async (req, res) => {
     const hasImage = Array.isArray(user) && user.some((c: any) => c.type === 'image_url');
     await new Promise((r) => setTimeout(r, 500));
     let content: string;
-    if (hasImage) {
+    // 구조화 출력 스키마가 오면 그 모양대로 채움 (슬롯 프롬프트·체크리스트 검수 테스트용)
+    const schema = b.response_format?.json_schema?.schema;
+    const fill = (sc: any, key = ''): any => {
+      if (sc?.enum) return key === 'answer' ? (Math.random() < FAIL_RATE ? 'no' : 'yes') : sc.enum[0];
+      if (sc?.type === 'object') return Object.fromEntries(Object.entries<any>(sc.properties ?? {}).map(([k, v]) => [k, fill(v, k)]));
+      if (sc?.type === 'array') return [];
+      if (sc?.type === 'integer' || sc?.type === 'number') return 8;
+      return `mock ${key} with concrete visible detail`;
+    };
+    if (schema && !('positive' in (schema.properties ?? {})) && !('score' in (schema.properties ?? {}))) {
+      content = JSON.stringify(fill(schema));
+    } else if (hasImage && schema && 'checks' in (schema.properties ?? {})) {
+      const fail = Math.random() < FAIL_RATE;
+      const code = Object.keys(REASONS)[Math.floor(Math.random() * 6)];
+      content = JSON.stringify({ checks: { landed: 'yes', unchanged: 'n/a', clean: fail ? 'no' : 'yes' }, score: fail ? 4 : 8, defects: fail ? [code] : [], cause: fail ? 'motion' : 'none', reason: fail ? REASONS[code] : '체크리스트를 모두 통과했어요.' });
+    } else if (hasImage) {
       const fail = Math.random() < FAIL_RATE;
       const code = Object.keys(REASONS)[Math.floor(Math.random() * 6)];
       content = JSON.stringify(fail ? { score: 3 + Math.floor(Math.random() * 3), defects: [code], reason: REASONS[code] } : { score: 7 + Math.floor(Math.random() * 3), defects: [], reason: '요청과 톤에 맞고 눈에 띄는 결함이 없어요.' });

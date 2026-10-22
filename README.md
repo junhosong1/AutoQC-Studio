@@ -44,11 +44,29 @@ Claude Code가 MCP로 직접 조작할 수 있어, 자연어 지시만으로 제
 | **크레딧 관리** | Comfy 크레딧 잔액, 현재 설정 기준 예상 차감, 생성 후 잔액, 작업별 실제 사용량 기록 |
 | **VRAM 절약 모드** | 12GB GPU에서 LLM ↔ 이미지 모델이 번갈아 VRAM을 쓰도록 단계마다 언로드 (LM Studio unload + ComfyUI `/free`) |
 | **검수 신뢰도** | 사람이 갤러리에서 채택/반려하면 자동 검수 판정과의 일치율 · 오판 건수 계산 |
+| **제작 스킬 적용** | 실제 제작에 쓰는 스킬(shot-prep · Seedance 프롬프트 · Leera 로케이션 · 캐릭터 시트)을 프롬프트 작성과 검수 규칙으로 변환 |
+| **원인 진단 재시도** | 영상 결함이 원본(시작 이미지·레퍼런스)에 이미 있었는지, 움직임에서 생겼는지 판정 → 원본 문제면 재시도 중단(크레딧 절약), 움직임 문제면 움직임 문장만 수정 |
+| **단독 검수** | 생성 없이 이미 있는 이미지(다른 툴에서 만든 캐릭터 시트·로케이션)를 같은 기준으로 점검 |
+| **LLM 선택** | LM Studio(로컬) · OpenAI 호환 서버(Ollama, OpenRouter 등) · Claude API 중 선택 — 특정 모델에 묶이지 않음 |
 | **MCP 서버** | Claude Code / Claude Desktop에서 툴을 직접 제어 (아래 참고) |
+
+## 제작 스킬 → 파이프라인 규칙
+
+| 스킬 | 파이프라인에서 하는 일 |
+|---|---|
+| shot-prep | 생성 후 3단계 검증(요청대로 바뀌었나 / 바뀌면 안 되는 게 그대로인가 / 몰래 깨지거나 추가된 게 없나) · 슬롭 검사 · 영상 결함 원인 진단 |
+| Seedance 프롬프트 | "보이는 것만 쓰기", 레퍼런스 태깅, 샷 단위 독립 문서, 카메라·오디오 규칙 |
+| Leera | 로케이션: 3/4 시점 · 앵커 오브젝트 · 단일 광원 · 깊이감 |
+| character-sheet | 고정 템플릿(#3a3a3c 회색 배경 3열) + 홍채·캐치라이트·머리 크롭·비대칭 검사, 배경색은 픽셀로 측정 |
+
+두 단계로 적용합니다.
+
+- **압축 규칙**: 작은 로컬 모델도 따라오도록 LLM은 JSON 빈칸(피사체·동작·배경·빛·카메라·제약)만 채우고, 문장 조립과 금지어(epic, stunning…) 제거·레퍼런스 누락 검사는 코드가 합니다. 검수도 "예/아니오" 질문 여러 개로 나눠 물을 수 있습니다.
+- **원문 스킬**: Claude처럼 긴 규칙을 소화하는 모델이면 `skills/` 폴더의 원문을 그대로 붙입니다.
 
 ## Claude Code로 제어하기 (MCP)
 
-`tools/mcp-server.ts`가 AutoQC Studio를 MCP 도구 9개로 노출합니다.
+`tools/mcp-server.ts`가 AutoQC Studio를 MCP 도구 10개로 노출합니다.
 
 | 도구 | 하는 일 |
 |---|---|
@@ -61,6 +79,7 @@ Claude Code가 MCP로 직접 조작할 수 있어, 자연어 지시만으로 제
 | `autoqc_batch_status` | 배치 진행 상황 |
 | `autoqc_cancel` | 작업 · 배치 취소 |
 | `autoqc_stats` | 통과율 · 결함 분포 · 단계별 시간 통계 |
+| `autoqc_check_image` | 생성 없이 이미지 단독 검수 (캐릭터 시트 · 로케이션 · 일반) |
 
 등록 (Windows, 프로젝트 폴더에서):
 
@@ -98,12 +117,14 @@ server/      서버 (Express + TS)
   ├ jobs.ts         생성 → 검수 → 재시도 파이프라인
   ├ llm.ts / qc.ts  프롬프트 확장 · Vision 검수
   ├ batch.ts        배치 제작
+  ├ skills.ts       제작 스킬 → 압축 규칙 · 슬롯 · 프롬프트 점검
   ├ credits.ts      Comfy 크레딧 잔액 · 비용 추정
   └ video.ts        영상 프레임 추출 (검수용)
 web/         화면 (React + TypeScript + Vite)
-modules/     모듈 14종 (폴더 하나 = workflow.json + manifest.json)
+modules/     모듈 16종 (폴더 하나 = workflow.json + manifest.json)
+skills/      제작 스킬 원문 (.md, 개인 파일은 저장소 제외)
 tools/       MCP 서버, GPU 없이 테스트하는 가짜 ComfyUI / LM Studio
-docs/        진행 기록
+docs/        진행 기록 · 인수인계(HANDOFF.md)
 ```
 
 모듈 작성 규칙: [`modules/README.md`](modules/README.md)
@@ -115,7 +136,8 @@ docs/        진행 기록
 | 이미지 (로컬) | `qwen_t2i`, `qwen_edit`, `krea2_turbo_t2i`, `ideogram4_t2i` |
 | 이미지 (유료 API) | `gpt_image2_t2i`, `gpt_image2_edit` |
 | 영상 (로컬) | `ltx25_t2v`, `ltx25_i2v`, `ltx25_flf2v`, `elements_video` |
-| 영상 (유료 API) | `seedance2_i2v`, `minimax_h3_t2v`, `minimax_h3_i2v`, `minimax_h3_r2v` |
+| 영상 (유료 API) | `seedance2_i2v`, `seedance2_ref`, `seedance25_ref` (레퍼런스 최대 6장 + 오디오 동시 생성) |
+| 영상 (로컬 · MiniMax H3) | `minimax_h3_t2v`, `minimax_h3_i2v`, `minimax_h3_r2v` |
 
 ## 개발 · 테스트
 

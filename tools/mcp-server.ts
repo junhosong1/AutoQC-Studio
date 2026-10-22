@@ -74,9 +74,10 @@ server.registerTool('autoqc_status', {
   description: 'AutoQC Studio 연결 상태(ComfyUI, LLM)와 사용할 수 있는 생성 모듈 목록(id, 이미지/영상, 참조 이미지 칸 수)을 보여 줍니다. 생성 전에 module_id를 고를 때 먼저 호출하세요. 연결이 안 되면 autoqc_start로 앱을 켜세요 (셸 명령으로 서버를 직접 띄우지 말 것).',
   inputSchema: {},
 }, async () => {
-  const [st, mods, lr, cr] = await Promise.all([call('/api/status'), call('/api/modules'), call('/api/comfy/loras').catch(() => ({ loras: [] })), call('/api/credits').catch(() => null)]);
+  const [st, mods, lr, cr, sk] = await Promise.all([call('/api/status'), call('/api/modules'), call('/api/comfy/loras').catch(() => ({ loras: [] })), call('/api/credits').catch(() => null), call('/api/skills').catch(() => null)]);
   return text({
     comfy: st.comfy, llm: st.llm, comfy_credits: cr?.configured ? (cr.error ?? cr.credits) : '유료 모델용 Comfy API 키 없음',
+    skills: sk ? { mode: sk.mode, files: sk.files.filter((f: any) => f.found).map((f: any) => f.file) } : null,
     modules: mods.modules.map((m: any) => ({ id: m.id, name: m.name, paid: m.cost === 'paid', kind: m.category === 'video' ? 'video' : 'image', ready: m.ready, reference_slots: m.images.length, has_motion_prompt: !!m.prompt2, lora_family: m.loraTarget ?? null, description: m.description, problems: m.problems })),
     loras: lr.loras,
   });
@@ -91,11 +92,12 @@ server.registerTool('autoqc_generate', {
     count: z.number().int().min(1).max(8).optional().describe('장수 (기본 1)'),
     ratio: z.enum(['1:1', '4:5', '3:4', '4:3', '9:16', '16:9', '2:3', '3:2', '21:9']).optional(),
     resolution: z.enum(['480p', '540p', '1K', '2K']).optional().describe('긴 변 기준. 영상은 540p/1K 권장 (RTX 3080)'),
-    duration: z.number().min(1).max(15).optional().describe('영상 길이(초)'),
+    duration: z.number().min(1).max(30).optional().describe('영상 길이(초). Seedance 2.0은 15초, 2.5는 30초까지'),
     motion: z.string().optional().describe('영상 움직임·카메라 (두 번째 프롬프트가 있는 모듈)'),
     reference_images: z.array(z.string()).optional().describe('참조 이미지의 PC 절대 경로 목록 (칸 순서대로 = image 1, 2 …)'),
     label_safe: z.boolean().optional().describe('영상: 라벨·로고 보존 모드'),
   lora: z.object({ name: z.string().describe('LoRA 파일명 (autoqc_status의 loras 목록, 예: qwen-image-2.1-fix-1.0-comfy.safetensors)'), strength: z.number().min(0).max(2).describe('강도 (보통 0.6~1.0)') }).optional().describe('이 생성에 적용할 LoRA. 모듈과 같은 계열(lora_family)이어야 효과가 있음'),
+    qc_profile: z.enum(['default', 'character_sheet', 'location']).optional().describe('만드는 에셋 종류. character_sheet = 회색 배경 3열 캐릭터 시트 규칙으로 작성·검수, location = 3/4 시점·앵커·광원 규칙의 로케이션 플레이트'),
 
     qc: z.object({ enabled: z.boolean(), passScore: z.number(), maxAttempts: z.number() }).optional(),
     wait: z.boolean().optional().describe('끝날 때까지 기다릴지 (기본 true, 최대 30분)'),
@@ -105,7 +107,7 @@ server.registerTool('autoqc_generate', {
   const long = a.resolution ? LONG[a.resolution] : undefined;
   const { job } = await call('/api/generate-simple', {
     moduleId: a.module_id, brief: a.brief, count: a.count, ratio: a.ratio, long, duration: a.duration, motion: a.motion,
-    images: a.reference_images, labelSafe: a.label_safe, qc: a.qc, lora: a.lora ?? null,
+    images: a.reference_images, labelSafe: a.label_safe, qc: a.qc, lora: a.lora ?? null, qcProfile: a.qc_profile,
   });
   if (a.wait === false) return text({ job_id: job.id, status: job.status, note: 'autoqc_job으로 진행 상황을 확인하세요.' });
   const t0 = Date.now();
@@ -115,6 +117,26 @@ server.registerTool('autoqc_generate', {
     if (!['queued', 'running'].includes(j.status)) return text(await summarizeJob(j));
     if (Date.now() - t0 > 30 * 60 * 1000) return text({ job_id: job.id, status: j.status, note: '30분이 지나 기다리기를 멈췄어요. autoqc_job으로 이어서 확인하세요.' });
   }
+});
+
+server.registerTool('autoqc_check_image', {
+  title: '이미지 단독 검수 (생성 없이)',
+  description: '이미 있는 이미지(예: 힉스필드에서 만든 캐릭터 시트·로케이션, 다른 툴 결과물)를 AutoQC 검수 규칙으로만 확인합니다. character_sheet는 배경색(#3a3a3c)을 픽셀로 재고, 눈·초상 크기·대칭·질감을 LLM이 점검합니다. location은 노출 클리핑과 광원·3/4 시점·앵커·깊이감을 봅니다. 크레딧을 쓰지 않습니다.',
+  inputSchema: {
+    files: z.array(z.string()).min(1).max(20).describe('검수할 이미지의 PC 절대 경로들'),
+    profile: z.enum(['default', 'character_sheet', 'location']).optional().describe('기본 default'),
+    brief: z.string().optional().describe('이 이미지가 무엇이어야 하는지 (예: "심청 캐릭터 시트, 흰 저고리")'),
+    tone_id: z.string().optional(),
+  },
+}, async (a) => {
+  const out = [];
+  for (const f of a.files) {
+    try {
+      const r = await call('/api/qc/check', { path: f, profile: a.profile ?? 'default', brief: a.brief, toneId: a.tone_id });
+      out.push({ file: f, passed: r.passed, score: r.score, defects: r.defects, rule: r.rule?.reason ?? null, reason: r.llm?.reason ?? r.llmError ?? null, sec: r.sec });
+    } catch (e: any) { out.push({ file: f, error: e.message }); }
+  }
+  return text(out);
 });
 
 server.registerTool('autoqc_job', {
@@ -131,7 +153,7 @@ const stepSchema = z.object({
   count: z.number().int().min(1).max(4).optional().describe('컷당 장수 (기본 1)'),
   ratio: z.enum(['1:1', '4:5', '3:4', '4:3', '9:16', '16:9', '2:3', '3:2', '21:9']).optional(),
   resolution: z.enum(['480p', '540p', '720p', '1K', '2K', '3K', '4K']).optional().describe('긴 변 기준 (영상은 480p~720p 권장)'),
-  duration: z.number().min(1).max(15).optional().describe('영상 길이(초)'),
+  duration: z.number().min(1).max(30).optional().describe('영상 길이(초). Seedance 2.0은 15초, 2.5는 30초까지'),
   source: z.union([z.literal('product'), z.number().int().min(1)]).optional().describe("'product' = 상품 사진을 참조(기본), 숫자 N = N번째 컷의 결과를 시작 이미지로"),
   motion: z.string().optional().describe('영상 움직임·카메라'),
   label_safe: z.boolean().optional().describe('영상: 라벨·로고 보존 (기본 켜짐)'),
@@ -157,6 +179,7 @@ server.registerTool('autoqc_batch', {
     limit: z.number().int().min(1).max(200).optional().describe('앞에서부터 몇 개만'),
     tone_id: z.string().optional().describe('앱 설정의 브랜드 톤 id'),
     qc: z.object({ enabled: z.boolean(), passScore: z.number(), maxAttempts: z.number() }).optional(),
+    on_prev_fail: z.enum(['auto', 'skip']).optional().describe('앞 컷이 검수 실패했을 때: auto(기본) = 최고점 컷(통과점수-2 이상) → 없으면 상품 사진으로 이어감 / skip = 건너뜀'),
   },
 }, async (a) => {
   if (!a.folder && !a.files?.length && !a.products?.length) throw new Error('folder, files, products 중 하나는 넣어 주세요');
@@ -165,7 +188,7 @@ server.registerTool('autoqc_batch', {
     duration: s.duration, source: s.source === undefined || s.source === 'product' ? 'product' : s.source - 1,
     motion: s.motion, labelSafe: s.label_safe, fast: s.fast, lora: s.lora ?? null,
   }));
-  const r = await call('/api/batches/from-folder', { folder: a.folder, files: a.files, products: a.products, steps, name: a.name, limit: a.limit, toneId: a.tone_id, qc: a.qc });
+  const r = await call('/api/batches/from-folder', { folder: a.folder, files: a.files, products: a.products, steps, name: a.name, limit: a.limit, toneId: a.tone_id, qc: a.qc, onPrevFail: a.on_prev_fail });
   const b = r.batch;
   return text({
     batch_id: b.id, products: b.products.map((p: any) => p.name), steps: b.steps.map((s: any) => `${s.label} (${s.moduleId}, ${s.ratio})`),

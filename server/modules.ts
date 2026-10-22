@@ -530,6 +530,26 @@ export function applyToWorkflow(m: ModuleDef, opts: ApplyOptions): ApiWorkflow {
       _meta: { title: 'AutoQC LoRA' },
     };
   }
+
+  // 스위치로 꺼 둔 내장 LoRA 가지는 떼어 냄: ComfyUI는 꺼진 가지의 노드도 검사해서,
+  // 그 LoRA 파일이 없으면 (예: krea2_darkbrush) 실행 전에 "Value not in list"로 실패함
+  const boolOf = (v: any): boolean | undefined => {
+    if (typeof v === 'boolean') return v;
+    if (isLink(v)) { const p = wf[String(v[0])]; if (typeof p?.inputs?.value === 'boolean') return p.inputs.value; }
+    return undefined;
+  };
+  for (const n of Object.values<any>(wf)) {
+    if (!/Switch/i.test(n.class_type)) continue;
+    const on = boolOf(n.inputs?.switch);
+    if (on === undefined) continue;
+    const off = on ? 'on_false' : 'on_true', live = on ? 'on_true' : 'on_false';
+    const v = n.inputs[off];
+    if (!isLink(v) || !isLink(n.inputs[live]) || !LORA_NODE.test(wf[String(v[0])]?.class_type ?? '')) continue;
+    const loraId = String(v[0]);
+    n.inputs[off] = [...n.inputs[live]];
+    const stillUsed = Object.values<any>(wf).some((x) => Object.values<any>(x.inputs ?? {}).some((y) => isLink(y) && String(y[0]) === loraId));
+    if (!stillUsed) delete wf[loraId];
+  }
   return wf;
 }
 

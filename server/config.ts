@@ -14,12 +14,20 @@ export interface Tone { id: string; label: string; text: string }
 export interface Settings {
   comfyUrl: string;
   llm: {
-    backend: 'lmstudio' | 'claude';
+    /** lmstudio: 로컬 LM Studio / openai: OpenAI 호환 서버 아무거나 (Ollama, OpenRouter, vLLM, OpenAI 등) / claude: Claude API */
+    backend: 'lmstudio' | 'openai' | 'claude';
     lmstudioUrl: string;
     lmstudioModel: string;
+    openaiUrl: string;
+    openaiModel: string;
+    openaiKey: string;
     claudeModel: string;
     anthropicKey: string;
     temperature: number;
+    /** 제작 스킬 적용: auto(Claude=원문, 그 외=압축) / compact / full / off(기존 프롬프트) */
+    skillMode: 'auto' | 'compact' | 'full' | 'off';
+    /** 검수 방식: single(한 번에 체크리스트) / split(작은 예·아니오 질문 여러 번 — 작은 비전 모델용) */
+    qcMode: 'single' | 'split';
   };
   qc: { passScore: number; maxAttempts: number; minStd: number };
   /** 12GB GPU용: LLM과 이미지 모델이 VRAM을 번갈아 쓰도록 매번 내려줌 */
@@ -40,9 +48,14 @@ export const DEFAULT_SETTINGS: Settings = {
     backend: 'lmstudio',
     lmstudioUrl: 'http://127.0.0.1:1234',
     lmstudioModel: 'google/gemma-4-26b-a4b-qat',
+    openaiUrl: 'http://127.0.0.1:11434',
+    openaiModel: '',
+    openaiKey: '',
     claudeModel: 'claude-haiku-5-5',
     anthropicKey: '',
     temperature: 0.4,
+    skillMode: 'auto',
+    qcMode: 'single',
   },
   qc: { passScore: 7, maxAttempts: 3, minStd: 8 },
   vramSaver: true,
@@ -85,6 +98,7 @@ export function saveSettings(patch: any): Settings {
   const cur = getSettings();
   // 화면에는 키를 가려서 보내므로, 가려진 값이 돌아오면 기존 키를 유지
   if (patch?.llm?.anthropicKey && String(patch.llm.anthropicKey).startsWith('••')) delete patch.llm.anthropicKey;
+  if (patch?.llm?.openaiKey && String(patch.llm.openaiKey).startsWith('••')) delete patch.llm.openaiKey;
   for (const k of ['hfToken', 'civitaiToken', 'comfyApiKey']) if (patch?.[k] && String(patch[k]).startsWith('••')) delete patch[k];
   cache = merge(cur, patch);
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -95,6 +109,7 @@ export function saveSettings(patch: any): Settings {
 export function publicSettings(): Settings {
   const s = structuredClone(getSettings());
   if (s.llm.anthropicKey) s.llm.anthropicKey = '••••' + s.llm.anthropicKey.slice(-4);
+  if (s.llm.openaiKey) s.llm.openaiKey = '••••' + s.llm.openaiKey.slice(-4);
   if (s.hfToken) s.hfToken = '••••' + s.hfToken.slice(-4);
   if (s.civitaiToken) s.civitaiToken = '••••' + s.civitaiToken.slice(-4);
   if (s.comfyApiKey) s.comfyApiKey = '••••' + s.comfyApiKey.slice(-4);

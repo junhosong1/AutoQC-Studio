@@ -5,11 +5,13 @@ import Gallery from './pages/Gallery';
 import Stats from './pages/Stats';
 import SettingsPage from './pages/Settings';
 import BatchPage, { Batch } from './pages/Batch';
+import QcCheck from './pages/QcCheck';
 
 const TABS = [
   { id: 'gen', label: '이미지 생성' },
   { id: 'video', label: '영상 생성' },
   { id: 'batch', label: '상품 배치' },
+  { id: 'check', label: '단독 검수' },
   { id: 'gallery', label: '결과 갤러리' },
   { id: 'stats', label: '기록 · 통계' },
   { id: 'settings', label: '모듈 · 설정' },
@@ -165,6 +167,7 @@ export default function App() {
       {tab === 'gen' && <Generate key="image" ctx={ctx} kind="image" />}
       {tab === 'video' && <Generate key="video" ctx={ctx} kind="video" />}
       {tab === 'batch' && <BatchPage ctx={ctx} />}
+      {tab === 'check' && <QcCheck ctx={ctx} />}
       {tab === 'gallery' && <Gallery ctx={ctx} />}
       {tab === 'stats' && <Stats ctx={ctx} />}
       {tab === 'settings' && <SettingsPage ctx={ctx} />}

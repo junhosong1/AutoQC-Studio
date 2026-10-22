@@ -8,7 +8,10 @@ import { exec } from 'node:child_process';
 import { ROOT, DATA_DIR, getSettings, outputRoot, publicSettings, saveSettings } from './config.js';
 import { Comfy } from './comfy.js';
 import { applyToWorkflow, loadModules, publicModules, summarizeHistory, workflowFromHistory, writeModule, getModules, getModule, suggestModule, existingConflict, sizeAndDuration } from './modules.js';
-import { DEFECT_CODES, enhancePrompt, llmStatus } from './llm.js';
+import { DEFECT_CODES, QC_PROFILES, enhancePrompt, llmStatus, review } from './llm.js';
+import { skillMode, skillStatus, SKILLS_DIR } from './skills.js';
+import { decode, precheck, profileCheck, toJpeg } from './qc.js';
+import sharp from 'sharp';
 import { PRESETS, addDownload, allowedFolders, cancelDownload, listDownloads, onDownloadUpdate, probe } from './downloads.js';
 import { modelsRoot } from './config.js';
 import { normalizeProduct } from './productImage.js';
@@ -52,7 +55,8 @@ app.get('/api/status', wrap(async (_req, res) => {
 }));
 
 // ── 설정 ──
-app.get('/api/settings', (_req, res) => res.json({ settings: publicSettings(), defects: DEFECT_CODES }));
+app.get('/api/settings', (_req, res) => res.json({ settings: publicSettings(), defects: DEFECT_CODES, profiles: QC_PROFILES }));
+app.get('/api/skills', (_req, res) => res.json({ dir: SKILLS_DIR, mode: skillMode(), files: skillStatus() }));
 app.put('/api/settings', wrap(async (req, res) => {
   const s = saveSettings(req.body ?? {});
   comfy = new Comfy(s.comfyUrl);
@@ -141,11 +145,44 @@ app.post('/api/downloads/:id/cancel', (req, res) => { cancelDownload(req.params.
 
 // ── 프롬프트 확장 미리보기 ──
 app.post('/api/enhance', wrap(async (req, res) => {
-  const { brief, toneId, hasRefs } = req.body ?? {};
+  const { brief, toneId, hasRefs, moduleId, qcProfile } = req.body ?? {};
+  const tone = getSettings().tones.find((t) => t.id === toneId)?.text ?? '';
+  const m = moduleId ? getModule(String(moduleId)) : undefined;
+  const seedance = !!m?.workflow && Object.values<any>(m.workflow).some((x) => /^ByteDance2/.test(x.class_type));
+  const t0 = Date.now();
+  const r = await enhancePrompt(String(brief ?? ''), tone, '', !!hasRefs, { video: m?.category === 'video' && !m?.keyframe, refToken: m?.refToken, seedance, profile: qcProfile });
+  res.json({ ...r, sec: (Date.now() - t0) / 1000 });
+}));
+
+// ── 단독 검수: 이미 만든 이미지(힉스필드 캐릭터 시트·로케이션 등)를 검수 규칙으로만 확인 ──
+app.post('/api/qc/check', wrap(async (req, res) => {
+  const { data, path: localPath, brief, toneId, profile } = req.body ?? {};
+  let buf: Buffer;
+  if (data) buf = Buffer.from(String(data).replace(/^data:[^,]+,/, ''), 'base64');
+  else if (localPath && fs.existsSync(String(localPath)) && fs.statSync(String(localPath)).isFile()) buf = fs.readFileSync(String(localPath));
+  else throw new Error('이미지가 없어요 (data 또는 path)');
+  // webp·avif·heic 등도 검수할 수 있게 PNG로 (긴 변 2048 이하)
+  const png = await sharp(buf).rotate().resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true }).png().toBuffer();
+  const img = decode(png);
+  if (!img) throw new Error('이미지를 읽지 못했어요');
+  const prof = (['default', 'character_sheet', 'location'] as const).includes(profile) ? profile : 'default';
   const tone = getSettings().tones.find((t) => t.id === toneId)?.text ?? '';
   const t0 = Date.now();
-  const r = await enhancePrompt(String(brief ?? ''), tone, '', !!hasRefs);
-  res.json({ ...r, sec: (Date.now() - t0) / 1000 });
+  const pre = precheck(img, undefined, undefined, getSettings().qc.minStd);
+  const pc = pre.passed && prof !== 'default' ? profileCheck(img, prof) : null;
+  const rule = !pre.passed ? { defects: pre.defects, reason: pre.reason } : pc;
+  // 규칙에서 걸려도 LLM 의견은 같이 받아 둠 (단독 검수는 진단이 목적)
+  let llm: any = null, llmError: string | null = null;
+  try { llm = await review(toJpeg(img, 1024), { brief: String(brief || (prof === 'character_sheet' ? 'character reference sheet' : prof === 'location' ? 'location plate' : 'image')), tone, prompt: String(brief || ''), profile: prof }); }
+  catch (e: any) { llmError = e.message; }
+  const defects = [...new Set([...(rule?.defects ?? []), ...(llm?.defects ?? [])])];
+  const passScore = getSettings().qc.passScore;
+  const score = rule ? Math.min(llm?.score ?? 0, 4) : llm?.score ?? null;
+  res.json({
+    profile: prof, width: img.width, height: img.height, sec: (Date.now() - t0) / 1000,
+    passed: score !== null && score >= passScore && defects.length === 0,
+    score, defects, rule, llm, llmError, skillMode: skillMode(),
+  });
 }));
 
 // ── 작업 ──
@@ -200,12 +237,13 @@ app.post('/api/generate-simple', wrap(async (req, res) => {
     motion: m.prompt2 ? String(b.motion ?? '') : undefined, count: Math.max(1, Math.min(8, Number(b.count) || 1)),
     width: sz.width, height: sz.height, seedMode: 'random', lora: b.lora ?? null, images, params: sz.params,
     labelSafe: b.labelSafe, toneId: b.toneId, qc: b.qc ?? { enabled: true, passScore: getSettings().qc.passScore, maxAttempts: getSettings().qc.maxAttempts },
+    qcProfile: b.qcProfile,
   } as any, comfy);
   res.json({ job });
 }));
 app.delete('/api/jobs/:id', wrap(async (req, res) => res.json(deleteJob(req.params.id))));
 app.post('/api/jobs/:id/cancel', (req, res) => { cancelJob(req.params.id); res.json({ ok: true }); });
-app.post('/api/jobs/:id/items/:i/human', wrap(async (req, res) => res.json({ item: setHuman(req.params.id, Number(req.params.i), req.body?.value ?? null) })));
+app.post('/api/jobs/:id/items/:i/human', wrap(async (req, res) => res.json({ item: setHuman(req.params.id, Number(req.params.i), req.body?.value ?? null, typeof req.body?.attempt === 'number' ? req.body.attempt : undefined) })));
 app.get('/api/jobs/:id', (req, res) => { const j = getJob(req.params.id); j ? res.json({ job: j }) : res.status(404).json({ error: 'not found' }); });
 
 app.get('/api/stats', (_req, res) => res.json(stats()));

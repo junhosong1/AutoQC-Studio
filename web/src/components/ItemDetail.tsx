@@ -8,11 +8,15 @@ export default function ItemDetail({ job, item, initialAttempt, toast, onSendToV
   useEffect(() => { setSel(initialAttempt ?? item.final ?? item.attempts.length - 1); }, [job.id, item.index, initialAttempt]); // eslint-disable-line
   const a = item.attempts[sel] ?? item.attempts[item.attempts.length - 1];
   const badge = itemBadge(job, item);
+  // 사람 판정은 지금 보고 있는 시도에만 (예전 기록은 최종 시도에 항목 판정이 붙어 있음)
+  const humanOf = (i: number) => item.attempts[i]?.human ?? (i === item.final ? item.human : undefined);
   const label = async (value: 'accept' | 'reject') => {
-    try { await api(`/api/jobs/${job.id}/items/${item.index}/human`, { value: item.human === value ? null : value }); }
+    try { await api(`/api/jobs/${job.id}/items/${item.index}/human`, { value: humanOf(sel) === value ? null : value, attempt: sel }); }
     catch (e: any) { toast(e.message); }
   };
   if (!a) return null;
+  const h = humanOf(sel);
+  const judged = a.status === 'passed' || a.status === 'failed';
   return (
     <>
       <div className="between">
@@ -30,6 +34,7 @@ export default function ItemDetail({ job, item, initialAttempt, toast, onSendToV
             <div key={i} className={'try ' + (x.status === 'passed' ? 'pass' : x.status === 'failed' ? 'fail' : '') + (i === sel ? ' cur' : '')}
               style={{ backgroundImage: x.file ? `url("${fileUrl(isVideo(x.file) ? x.poster : x.file)}")` : undefined, width: 44, height: 54 }} onClick={() => setSel(i)}>
               <span>{x.score ?? '-'}</span>
+              {humanOf(i) && <i className={'th ' + humanOf(i)}>{humanOf(i) === 'accept' ? '✓' : '✕'}</i>}
             </div>
           ))}
         </div>
@@ -67,14 +72,25 @@ export default function ItemDetail({ job, item, initialAttempt, toast, onSendToV
         <TimeBar attempts={item.attempts} />
         <div style={{ marginTop: 6 }}><TimeLegend /></div>
       </div>
+      {judged && (
+        <div className="judge">
+          <div className="judge-h">
+            <span>시도 {a.n} — 내 판단</span>
+            <span className="muted">AI 검수: <b style={{ color: a.status === 'passed' ? 'var(--pass)' : 'var(--fail)' }}>{a.status === 'passed' ? '통과' : '탈락'}</b></span>
+          </div>
+          <div className="grid2">
+            <button className={'btn sm ' + (h === 'accept' ? 'ok' : 'ghost')} onClick={() => label('accept')}>✓ 쓸 만함</button>
+            <button className={'btn sm ' + (h === 'reject' ? 'no' : 'ghost')} onClick={() => label('reject')}>✕ 못 씀</button>
+          </div>
+          {h && <div className={'judge-r ' + ((h === 'accept') === (a.status === 'passed') ? 'ok' : 'no')}>{(h === 'accept') === (a.status === 'passed') ? 'AI 판정과 일치' : `AI 판정과 불일치 — AI는 ${a.status === 'passed' ? '통과' : '탈락'}시켰어요`}</div>}
+        </div>
+      )}
       <div className="grid2" style={{ marginTop: 'auto' }}>
-        <button className={'btn sm ' + (item.human === 'accept' ? 'ok' : 'ghost')} onClick={() => label('accept')}>✓ 채택</button>
-        <button className={'btn sm ' + (item.human === 'reject' ? 'no' : 'ghost')} onClick={() => label('reject')}>✕ 반려</button>
         <button className="btn ghost sm" onClick={() => api('/api/open-folder', { path: item.sortedFile ?? a.file }).catch((e) => toast(e.message))}>폴더 열기</button>
         <a className="btn ghost sm" href={fileUrl(a.file)} target="_blank" rel="noreferrer">원본 보기</a>
         {onSendToVideo && a.kind !== 'video' && a.file && <button className="btn sm" style={{ gridColumn: 'span 2', border: '1px solid var(--accent-line)', background: 'var(--accent-weak)', color: 'var(--accent)', fontWeight: 600 }} onClick={() => onSendToVideo(a.file!)}>이 컷으로 영상 만들기 →</button>}
       </div>
-      <div className="small muted" style={{ lineHeight: 1.5 }}>채택/반려는 검수 판정이 사람 판단과 얼마나 맞는지(검수 신뢰도) 계산하는 데 쓰여요.</div>
+      <div className="small muted" style={{ lineHeight: 1.5 }}>내 판단은 위에서 고른 시도 하나에만 적용돼요. AI 검수 판정과 비교해 [기록 · 통계]의 검수 신뢰도가 계산돼요.</div>
     </>
   );
 }

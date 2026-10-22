@@ -23,10 +23,24 @@ interface Form {
   labelSafe?: boolean;
   ratio: string; tier: Tier; width: number; height: number; count: number; seedMode: 'random' | 'fixed'; seed: number;
   loraName: string; loraStrength: number; qcEnabled: boolean; passScore: number; maxAttempts: number;
+  /** 만드는 에셋 종류 (캐릭터 시트 / 로케이션이면 그 스킬 규칙으로 작성·검수) */
+  qcProfile?: 'default' | 'character_sheet' | 'location';
   params: Record<string, Record<string, any>>; // 모듈별 고급 설정
 }
 
-const load = (kind: string): Partial<Form> => { try { return JSON.parse(localStorage.getItem('aq.form.' + kind) || '{}'); } catch { return {}; } };
+// 프롬프트(기획 문장·움직임·확장 결과)는 이 브라우저 탭에서만 기억 → 앱을 다시 켜면 빈 칸으로 시작. 모듈·비율 같은 설정은 계속 기억
+const TEXT_KEYS = ['brief', 'motion', 'finalPrompt', 'finalFor'] as const;
+const read = (st: Storage, key: string) => { try { return JSON.parse(st.getItem(key) || '{}'); } catch { return {}; } };
+const load = (kind: string): Partial<Form> => {
+  const saved = read(localStorage, 'aq.form.' + kind);
+  for (const k of TEXT_KEYS) delete saved[k];
+  return { ...saved, ...read(sessionStorage, 'aq.text.' + kind) };
+};
+const persist = (kind: string, f: Form) => {
+  const keep: any = { ...f }, text: any = {};
+  for (const k of TEXT_KEYS) { text[k] = keep[k]; delete keep[k]; }
+  try { localStorage.setItem('aq.form.' + kind, JSON.stringify(keep)); sessionStorage.setItem('aq.text.' + kind, JSON.stringify(text)); } catch { /* */ }
+};
 export const isVideoModule = (m?: ModuleDef) => m?.category === 'video';
 
 export default function Generate({ ctx, kind }: { ctx: AppCtx; kind: 'image' | 'video' }) {
@@ -46,7 +60,7 @@ export default function Generate({ ctx, kind }: { ctx: AppCtx; kind: 'image' | '
   const uploadSlot = useRef(0);
   const set = (p: Partial<Form>) => setF((x) => ({ ...x, ...p }));
 
-  useEffect(() => { try { localStorage.setItem('aq.form.' + kind, JSON.stringify(f)); } catch { /* */ } }, [f, kind]);
+  useEffect(() => { persist(kind, f); }, [f, kind]);
   useEffect(() => {
     if (!settings) return;
     setF((x) => (x.passScore === 7 && x.maxAttempts === 3 ? { ...x, passScore: settings.qc.passScore, maxAttempts: settings.qc.maxAttempts } : x));
@@ -200,7 +214,7 @@ export default function Generate({ ctx, kind }: { ctx: AppCtx; kind: 'image' | '
     if (!f.brief.trim()) return setErr('먼저 만들고 싶은 장면을 적어 주세요');
     setBusy('enhance'); setErr('');
     try {
-      const r = await api('/api/enhance', { brief: f.brief, toneId: f.toneId, hasRefs: refs.some(Boolean) });
+      const r = await api('/api/enhance', { brief: f.brief, toneId: f.toneId, hasRefs: refs.some(Boolean), moduleId: mod?.id, qcProfile: kind === 'image' ? f.qcProfile : undefined });
       set({ finalPrompt: r.positive, finalFor: f.brief.trim() + '|' + (mod?.id ?? '') });
       toast(`프롬프트 확장 완료 · ${r.sec.toFixed(1)}초`);
     } catch (e: any) { setErr(e.message); }
@@ -232,6 +246,7 @@ export default function Generate({ ctx, kind }: { ctx: AppCtx; kind: 'image' | '
         images: refs.map((r) => r?.name ?? null),
         params,
         qc: { enabled: f.qcEnabled, passScore: f.passScore, maxAttempts: f.maxAttempts },
+        qcProfile: kind === 'image' ? f.qcProfile ?? 'default' : 'default',
       });
     } catch (e: any) { setErr(e.message); }
     setBusy('');
@@ -437,8 +452,17 @@ export default function Generate({ ctx, kind }: { ctx: AppCtx; kind: 'image' | '
                 <div className="field"><small>통과 점수 (0~10)</small><input type="number" min={1} max={10} value={f.passScore} onChange={(e) => set({ passScore: Number(e.target.value) || 7 })} /></div>
                 <div className="field"><small>최대 시도</small><input type="number" min={1} max={6} value={f.maxAttempts} onChange={(e) => set({ maxAttempts: Number(e.target.value) || 3 })} /></div>
               </div>
-              <div className="checks">{Object.values(DEFECT_LABEL).map((d) => <span key={d}>{d}</span>)}</div>
-              <div className="small muted" style={{ marginTop: 8, lineHeight: 1.5 }}>기획 불일치·톤·깨진 글자 → 프롬프트 수정 후 재생성 / 그 외 → 시드만 바꿔 재생성</div>
+              {kind === 'image' && (
+                <div className="field" style={{ marginTop: 8 }}><small>에셋 종류 (작성·검수 규칙)</small>
+                  <select value={f.qcProfile ?? 'default'} onChange={(e) => set({ qcProfile: e.target.value as any })}>
+                    <option value="default">일반 (상품·연출컷)</option>
+                    <option value="character_sheet">캐릭터 시트 — 회색 배경 3열, 눈·크롭·대칭 검사</option>
+                    <option value="location">로케이션 — 3/4 시점·앵커·광원·깊이감 검사</option>
+                  </select>
+                </div>
+              )}
+              <div className="checks">{Object.entries(DEFECT_LABEL).filter(([k]) => (k !== 'sheet_rule' || f.qcProfile === 'character_sheet') && (k !== 'location_rule' || f.qcProfile === 'location') && (kind === 'video' || k !== 'motion_artifact')).map(([k, d]) => <span key={k}>{d}</span>)}</div>
+              <div className="small muted" style={{ marginTop: 8, lineHeight: 1.5 }}>기획 불일치·톤·글자·요청 외 변경 → 프롬프트 수정 후 재생성 / 그 외 → 시드만 바꿔 재생성{kind === 'video' ? ' / 영상은 원인 진단: 원본 문제면 원본부터, 움직임 문제면 움직임 문장만 고쳐요' : ''}</div>
             </>
           ) : <div className="small muted" style={{ marginTop: 6 }}>검수 없이 생성만 해요.</div>}
         </div>

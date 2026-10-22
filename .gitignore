@@ -8,3 +8,5 @@ workflows/
 .env
 *.zip
 *.mp4
+skills/*.md
+!skills/README.md

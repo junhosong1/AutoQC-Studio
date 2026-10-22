@@ -19,12 +19,18 @@ export interface BatchStep {
   motion?: string; labelSafe?: boolean; fast?: boolean; enhance?: boolean;
   lora?: { name: string; strength: number } | null;
 }
-export interface BatchCell { p: number; s: number; status: 'waiting' | 'running' | 'passed' | 'failed' | 'partial' | 'skipped' | 'error' | 'canceled'; jobId?: string; files: string[]; note?: string; sec?: number }
+export interface BatchCell {
+  p: number; s: number; status: 'waiting' | 'running' | 'passed' | 'failed' | 'partial' | 'skipped' | 'error' | 'canceled'; jobId?: string; files: string[]; note?: string; sec?: number;
+  /** 검수 실패 컷 중 최고점 (다음 컷이 이어받을 때 대안으로) */
+  fallback?: string; fallbackScore?: number;
+}
 export interface Batch {
   id: string; name: string; createdAt: number; finishedAt?: number;
   products: BatchProduct[]; steps: BatchStep[];
   toneId?: string; qc: { enabled: boolean; passScore: number; maxAttempts: number };
-  status: 'running' | 'done' | 'canceled' | 'error' | 'interrupted';
+  /** 앞 컷이 검수 실패했을 때: auto = 최고점 컷(통과 점수-2 이상)으로, 아니면 상품 사진으로 이어감 / skip = 건너뜀 */
+  onPrevFail?: 'auto' | 'skip';
+  status: 'queued' | 'running' | 'done' | 'canceled' | 'error' | 'interrupted';
   cells: BatchCell[]; outDir: string; error?: string; cancel?: boolean;
 }
 
@@ -41,7 +47,7 @@ function save() {
 export function loadBatches() {
   try {
     for (const b of JSON.parse(fs.readFileSync(FILE, 'utf8'))) {
-      if (b.status === 'running') { b.status = 'interrupted'; for (const c of b.cells) if (c.status === 'running' || c.status === 'waiting') c.status = 'canceled'; }
+      if (b.status === 'running' || b.status === 'queued') { b.status = 'interrupted'; for (const c of b.cells) if (c.status === 'running' || c.status === 'waiting') c.status = 'canceled'; }
       batches.push(b);
     }
   } catch { /* 없음 */ }
@@ -114,7 +120,7 @@ export async function createBatchFromFolder(body: any, comfy: Comfy, mods: any[]
     products.push({ name: s.name || mm?.name || key.replace(/[_-]+/g, ' '), features: s.features ?? mm?.features ?? '', images: [up] });
   }
   const steps = Array.isArray(body.steps) && body.steps.length ? body.steps : lastRecipe() ?? defaultRecipe(mods);
-  const batch = createBatch({ name: body.name || (folder ? path.basename(folder) : '상품 배치'), products, steps, toneId: body.toneId, qc: body.qc }, comfy);
+  const batch = createBatch({ name: body.name || (folder ? path.basename(folder) : '상품 배치'), products, steps, toneId: body.toneId, qc: body.qc, onPrevFail: body.onPrevFail }, comfy);
   return { batch, imageNotes: notes };
 }
 
@@ -133,18 +139,28 @@ export function createBatch(body: any, comfy: Comfy): Batch {
   const b: Batch = {
     id: randomUUID(), name: String(body.name || '상품 배치').trim(), createdAt: Date.now(), products, steps,
     toneId: body.toneId || undefined, qc: body.qc ?? { enabled: true, passScore: 7, maxAttempts: 3 },
-    status: 'running', cells: products.flatMap((_, p) => steps.map((_, s) => ({ p, s, status: 'waiting' as const, files: [] }))),
+    onPrevFail: body.onPrevFail === 'skip' ? 'skip' : 'auto',
+    status: batches.some((x) => x.status === 'running' || x.status === 'queued') ? 'queued' : 'running', cells: products.flatMap((_, p) => steps.map((_, s) => ({ p, s, status: 'waiting' as const, files: [] }))),
     outDir: path.join('_batches', `${stamp}_${safeName(String(body.name || 'batch'))}`).split(path.sep).join('/'),
   };
   batches.push(b); save(); emit(b);
   try { fs.writeFileSync(RECIPE, JSON.stringify(steps, null, 1), 'utf8'); } catch { /* */ }
-  void run(b, comfy);
+  // 배치는 한 번에 하나씩: 먼저 넣은 배치를 끝까지 돌린 뒤 다음 배치 시작
+  runChain = runChain.then(() => run(b, comfy)).catch(() => { /* run 안에서 기록 */ });
   return pub(b) as Batch;
 }
 
+let runChain: Promise<void> = Promise.resolve();
+
 export function cancelBatch(id: string) {
   const b = batches.find((x) => x.id === id);
-  if (!b || b.status !== 'running') return;
+  if (!b) return;
+  if (b.status === 'queued') {
+    b.cancel = true; b.status = 'canceled'; b.finishedAt = Date.now();
+    for (const c of b.cells) if (c.status === 'waiting') c.status = 'canceled';
+    emit(b); save(); return;
+  }
+  if (b.status !== 'running') return;
   b.cancel = true;
   const cur = b.cells.find((c) => c.status === 'running');
   if (cur?.jobId) cancelJob(cur.jobId);
@@ -161,6 +177,9 @@ async function waitJob(id: string, b: Batch) {
 }
 
 async function run(b: Batch, comfy: Comfy) {
+  if (b.status !== 'queued' && b.status !== 'running') return; // 대기 중 취소됨
+  if (!batches.includes(b)) return;
+  b.status = 'running'; emit(b); save();
   const root = outputRoot();
   try {
     for (let p = 0; p < b.products.length; p++) {
@@ -178,9 +197,21 @@ async function run(b: Batch, comfy: Comfy) {
           if (step.source === 'product') images = m.images.map((_, i) => prod.images[i] ?? null);
           else {
             const prev = b.cells.find((c) => c.p === p && c.s === step.source);
-            const src = prev?.files[0];
-            if (!src) { cell.status = 'skipped'; cell.note = `${Number(step.source) + 1}번 컷 결과가 없어 건너뜀`; emit(b); save(); continue; }
-            const name = await comfy.upload(fs.readFileSync(path.join(root, src)), `autoqc_batch_${b.id.slice(0, 6)}_${p + 1}_${s + 1}${path.extname(src) || '.png'}`);
+            const n = Number(step.source) + 1;
+            let src = prev?.files[0];
+            let name: string | null = null;
+            // 앞 컷이 검수에서 떨어졌을 때 (auto): 아깝게 떨어진 최고점 컷 → 없으면 상품 사진으로 이어감. 앞 컷이 오류·취소면 건너뜀
+            if (!src && (b.onPrevFail ?? 'auto') === 'auto' && prev && (prev.status === 'failed' || prev.status === 'partial')) {
+              if (prev.fallback && (prev.fallbackScore ?? 0) >= b.qc.passScore - 2) {
+                src = prev.fallback;
+                cell.note = `${n}번 컷이 검수 통과를 못 해서 최고점 컷(${prev.fallbackScore}점)으로 이어감`;
+              } else if (prod.images[0]) {
+                name = prod.images[0];
+                cell.note = `${n}번 컷이 검수 통과를 못 해서 상품 사진으로 대신 진행`;
+              }
+            }
+            if (!src && !name) { cell.status = 'skipped'; cell.note = `${n}번 컷 결과가 없어 건너뜀`; emit(b); save(); continue; }
+            if (src) name = await comfy.upload(fs.readFileSync(path.join(root, src)), `autoqc_batch_${b.id.slice(0, 6)}_${p + 1}_${s + 1}${path.extname(src) || '.png'}`);
             // 첫/끝 프레임 모듈이면 끝 프레임도 같은 컷으로 → 시작과 끝 모두 라벨이 정확한 숏폼
             images = m.images.map((b, i) => (i === 0 || /last|끝/i.test(b.label) ? name : null));
           }
@@ -203,6 +234,7 @@ async function run(b: Batch, comfy: Comfy) {
         // 상품 폴더로 정리 (통과 → 상품 폴더, 실패 → _검수실패)
         const files: string[] = [];
         let pass = 0;
+        let best: { file: string; score: number } | null = null;
         done.items.forEach((it, k) => {
           const a = it.final !== undefined ? it.attempts[it.final] : undefined;
           if (!a?.file) return;
@@ -212,8 +244,11 @@ async function run(b: Batch, comfy: Comfy) {
           fs.mkdirSync(path.dirname(path.join(root, destRel)), { recursive: true });
           fs.copyFileSync(path.join(root, a.file), path.join(root, destRel));
           if (ok) files.push(destRel.split(path.sep).join('/'));
+          // 실패 컷 중 최고점 (이미지일 때만 다음 컷의 시작 이미지가 될 수 있음)
+          else if (a.kind !== 'video' && (a.score ?? -1) > (best?.score ?? -1)) best = { file: destRel.split(path.sep).join('/'), score: a.score ?? 0 };
         });
         cell.files = files;
+        if (!files.length && best) { cell.fallback = (best as any).file; cell.fallbackScore = (best as any).score; }
         cell.sec = Math.round((Date.now() - t0) / 1000);
         cell.status = done.status === 'canceled' ? 'canceled' : done.status === 'error' ? 'error' : !b.qc.enabled ? (files.length ? 'passed' : 'failed') : pass === done.items.length ? 'passed' : pass > 0 || files.length ? 'partial' : 'failed';
         if (done.status === 'error') cell.note = done.error;
@@ -257,7 +292,7 @@ export function deleteBatch(id: string) {
   // 다른 배치가 생성 중이어도 상관없이 바로 지워지도록 파일 작업을 하지 않음.
   const i = batches.findIndex((b) => b.id === id);
   if (i < 0) throw new Error('배치를 찾을 수 없어요');
-  if (batches[i].status === 'running') throw new Error('진행 중인 배치는 먼저 취소해 주세요');
+  if (batches[i].status === 'running' || batches[i].status === 'queued') throw new Error('진행 중인 배치는 먼저 취소해 주세요');
   batches.splice(i, 1);
   try { save(); } catch (e) { console.error('[batch] 목록 저장 실패', e); }
   for (const l of delListeners) { try { l(id); } catch { /* */ } }

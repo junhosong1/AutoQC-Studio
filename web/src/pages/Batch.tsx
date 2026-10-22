@@ -38,6 +38,7 @@ export default function BatchPage({ ctx }: { ctx: AppCtx }) {
   const [steps, setSteps] = useState<BatchStep[]>(() => { try { const s = JSON.parse(localStorage.getItem('aq.batch.steps') || 'null'); if (Array.isArray(s) && s.length) return s; } catch { /* */ } return []; });
   const [toneId, setToneId] = useState('');
   const [qc, setQc] = useState({ enabled: true, passScore: 7, maxAttempts: 3 });
+  const [onPrevFail, setOnPrevFail] = useState<'auto' | 'skip'>('auto');
   // 유료 모델이 들어간 컷: 상품 수 × 장수로 예상 크레딧 합계
   const [batchCost, setBatchCost] = useState<number | null>(null);
   const costKey = JSON.stringify([steps.map((s) => [s.moduleId, s.ratio, s.long, s.duration, s.count]), products.length]);
@@ -88,7 +89,7 @@ export default function BatchPage({ ctx }: { ctx: AppCtx }) {
   const start = async () => {
     setBusy(true); setErr('');
     try {
-      const r = await api('/api/batches', { name, products: products.map(({ previews, ...p }) => p), steps, toneId: toneId || undefined, qc });
+      const r = await api('/api/batches', { name, products: products.map(({ previews, ...p }) => p), steps, toneId: toneId || undefined, qc, onPrevFail });
       setSel(r.batch.id); toast(`배치를 시작했어요 · 상품 ${products.length}개 × 컷 ${steps.length}종`);
     } catch (e: any) { setErr(e.message); }
     setBusy(false);
@@ -189,6 +190,12 @@ export default function BatchPage({ ctx }: { ctx: AppCtx }) {
           <label className="field"><small>통과 점수</small><input type="number" min={0} max={10} value={qc.passScore} onChange={(e) => setQc({ ...qc, passScore: Number(e.target.value) })} /></label>
           <label className="field"><small>최대 시도</small><input type="number" min={1} max={6} value={qc.maxAttempts} onChange={(e) => setQc({ ...qc, maxAttempts: Number(e.target.value) })} /></label>
         </div>
+        <label className="field"><small>앞 컷이 검수에서 떨어지면 (다음 컷이 그 결과를 이어받을 때)</small>
+          <select value={onPrevFail} onChange={(e) => setOnPrevFail(e.target.value as any)}>
+            <option value="auto">이어서 진행 — 아깝게 떨어진 최고점 컷(통과 점수-2 이상), 없으면 상품 사진으로</option>
+            <option value="skip">건너뛰기 — 통과한 컷만 다음 단계로</option>
+          </select>
+        </label>
         {err && <div className="err">{err}</div>}
         {batchCost !== null && (() => {
           const bal = ctx.credits?.configured && !ctx.credits.error ? ctx.credits.credits : undefined;
@@ -239,11 +246,11 @@ function BatchView({ b, ctx, open, onToggle }: { b: Batch; ctx: AppCtx; open: bo
           <b>{open ? '▾' : '▸'} {b.name} <span className="muted" style={{ fontWeight: 400, fontSize: 12 }}>· {new Date(b.createdAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></b>
           <small>상품 {b.products.length}개 × 컷 {b.steps.length}종 · 진행 {done}/{b.cells.length} · 통과 {passed} · 누적 {Math.floor(sec / 60)}분 {sec % 60}초</small>
         </div>
-        <span className={'tag ' + (ST[b.status === 'done' ? 'passed' : b.status]?.[1] ?? 'gray')}>{b.status === 'running' ? '진행 중' : b.status === 'done' ? '완료' : b.status === 'canceled' ? '취소됨' : b.status === 'interrupted' ? '중단됨(재시작)' : '오류'}</span>
-        {b.status === 'running' && <button className="btn ghost sm" onClick={() => api(`/api/batches/${b.id}/cancel`, {})}>취소</button>}
+        <span className={'tag ' + (ST[b.status === 'done' ? 'passed' : b.status]?.[1] ?? 'gray')}>{b.status === 'running' ? '진행 중' : b.status === 'queued' ? '순서 대기' : b.status === 'done' ? '완료' : b.status === 'canceled' ? '취소됨' : b.status === 'interrupted' ? '중단됨(재시작)' : '오류'}</span>
+        {(b.status === 'running' || b.status === 'queued') && <button className="btn ghost sm" onClick={() => api(`/api/batches/${b.id}/cancel`, {})}>취소</button>}
         <button className="btn ghost sm" onClick={() => api('/api/open-folder', { path: b.outDir }).catch((e) => ctx.toast(e.message))}>결과 폴더</button>
         <a className="btn ghost sm" href={`/api/batches/${b.id}/report.csv`}>요약 CSV</a>
-        {b.status !== 'running' && (
+        {b.status !== 'running' && b.status !== 'queued' && (
           <button className="xdel" title="목록에서 지우기 (파일은 남김)" onClick={async () => {
             if (!window.confirm(`"${b.name}" 배치를 목록에서 지울까요?\n결과 폴더의 이미지·영상과 요약 CSV는 그대로 남아요.`)) return;
             try { await api(`/api/batches/${b.id}`, undefined, 'DELETE'); ctx.toast('배치를 목록에서 지웠어요 (파일은 그대로)'); } catch (e: any) { ctx.toast(e.message === 'Failed to fetch' ? 'AutoQC 서버에 연결할 수 없어요. start.bat 창을 확인해 주세요.' : e.message); }

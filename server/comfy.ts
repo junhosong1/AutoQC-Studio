@@ -88,6 +88,17 @@ export class Comfy {
       body: JSON.stringify({ prompt, client_id: this.clientId, ...(getSettings().comfyApiKey ? { extra_data: { api_key_comfy_org: getSettings().comfyApiKey } } : {}) }),
     }, 30000);
     if (!r?.prompt_id) throw new ComfyError('큐 등록 실패: prompt_id가 없어요');
+    // 일부 출력만 검증 실패한 경우 ComfyUI는 오류 없이 나머지(예: 텍스트 미리보기)만 실행함 → 저장 노드가 안 돌아 결과가 비게 됨.
+    // 이때는 바로 실패 처리하고 어떤 노드·파일이 문제인지 알려 줌
+    const ne = r.node_errors && Object.keys(r.node_errors).length ? r.node_errors : null;
+    if (ne) {
+      try { await this.json('/queue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delete: [r.prompt_id] }) }, 5000); } catch { /* 이미 실행 중이면 무시 */ }
+      const [id, info] = Object.entries<any>(ne)[0];
+      const err = info?.errors?.[0];
+      const detail = `${err?.message ?? ''} ${err?.details ?? ''}`.trim();
+      const hint = /not in list|value_not_in_list/i.test(detail) ? ' → 이 파일이 ComfyUI models 폴더에 없어요. [모듈 · 설정]의 다운로드 또는 ComfyUI에서 받아 주세요' : '';
+      throw new ComfyError(`워크플로우 검증 실패 — 노드 ${id} (${info?.class_type ?? '?'}): ${detail}${hint}`);
+    }
     return r.prompt_id;
   }
 
